@@ -1,0 +1,2 @@
+# Scripts administrativos e de banco nunca devem ser executados por HTTP.
+Require all denied

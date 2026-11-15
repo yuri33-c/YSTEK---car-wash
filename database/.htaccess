@@ -1,0 +1,2 @@
+# Schemas e documentos SQL não devem ser baixados diretamente pela web.
+Require all denied

@@ -1,0 +1,2 @@
+# Código interno e scripts de manutenção não devem ser executados diretamente pelo navegador.
+Require all denied

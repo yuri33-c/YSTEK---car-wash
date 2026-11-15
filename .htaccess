@@ -1,0 +1,11 @@
+Options -Indexes
+DirectoryIndex index.php
+
+# Impede acesso direto a arquivos de configuração/metadados sensíveis.
+<FilesMatch "^\.(env|gitignore|htaccess)$">
+    Require all denied
+</FilesMatch>
+
+<FilesMatch "^(composer\.json|composer\.lock)$">
+    Require all denied
+</FilesMatch>
