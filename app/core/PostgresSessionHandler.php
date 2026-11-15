@@ -14,6 +14,9 @@ final class PostgresSessionHandler implements \SessionHandlerInterface, \Session
         $config = require __DIR__ . '/../config/application.php';
         $db = $config['database'];
         $dsn = "pgsql:host={$db['host']};port={$db['port']};dbname={$db['name']}";
+        if ($db['sslmode'] !== '') {
+            $dsn .= ";sslmode={$db['sslmode']}";
+        }
         $this->pdo = new PDO($dsn, $db['user'], $db['pass'], [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,

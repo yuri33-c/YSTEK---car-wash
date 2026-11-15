@@ -15,6 +15,9 @@ class TTransaction
             $db = $config['database'];
             
             $dsn = "pgsql:host={$db['host']};port={$db['port']};dbname={$db['name']};";
+            if ($db['sslmode'] !== '') {
+                $dsn .= "sslmode={$db['sslmode']};";
+            }
             // Uma aplicação de produção deve conectar somente ao banco configurado.
             // Não existe fallback para o database "postgres": isso evita mascarar
             // erro de configuração e evita conceder privilégios desnecessários.

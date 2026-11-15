@@ -27,6 +27,11 @@ foreach ($required as $key) {
 }
 
 $environment = strtolower((string)(getenv('YSTEK_APP_ENV') ?: 'production'));
+$sslMode = strtolower(trim((string)(getenv('YSTEK_DB_SSLMODE') ?: '')));
+$validSslModes = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'];
+if ($sslMode !== '' && !in_array($sslMode, $validSslModes, true)) {
+    throw new \RuntimeException('YSTEK_DB_SSLMODE possui um valor inválido.');
+}
 
 return [
     'general' => [
@@ -43,6 +48,7 @@ return [
         'name' => (string)getenv('YSTEK_DB_NAME'),
         'user' => (string)getenv('YSTEK_DB_USER'),
         'pass' => (string)getenv('YSTEK_DB_PASS'),
+        'sslmode' => $sslMode,
         'type' => 'pgsql',
     ],
 ];

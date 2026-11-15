@@ -20,10 +20,12 @@ Antes do primeiro deploy, aplique `database/migrations/20261115_ystek_sessions.s
    | `YSTEK_DB_NAME` | Nome do banco |
    | `YSTEK_DB_USER` | Usuário do banco |
    | `YSTEK_DB_PASS` | Senha do banco |
+   | `YSTEK_DB_SSLMODE` | `require` |
 
    `YSTEK_SESSION_DRIVER=pgsql` e `YSTEK_ERROR_LOG=/dev/stderr` já são definidos pela imagem. O container escuta na porta padrão `80`.
 
-4. Verifique no provedor do PostgreSQL se conexões externas da Vercel são permitidas. Faça o deploy depois de configurar as variáveis.
+4. No Supabase, use a conexão **Session Pooler** (porta `5432`), não o Transaction Pooler: as sessões PHP usam locks do PostgreSQL que dependem de uma conexão persistente. O usuário normalmente tem o formato `postgres.<project-ref>`.
+5. Verifique se conexões externas da Vercel são permitidas. Faça o deploy depois de aplicar a migração e configurar as variáveis.
 
 ## Observações
 
