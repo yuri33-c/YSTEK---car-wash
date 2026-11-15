@@ -1,7 +1,8 @@
 <?php
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
-ini_set('error_log', __DIR__ . '/app/error.log');
+$errorLog = getenv('YSTEK_ERROR_LOG');
+ini_set('error_log', $errorLog !== false && trim($errorLog) !== '' ? $errorLog : __DIR__ . '/app/error.log');
 
 set_exception_handler(function ($e) {
     error_log("Global Exception: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());

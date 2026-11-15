@@ -19,19 +19,28 @@ final class Security
             return;
         }
 
-        $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            || (($_SERVER['SERVER_PORT'] ?? null) == 443);
-
         ini_set('session.use_strict_mode', '1');
         ini_set('session.use_only_cookies', '1');
         ini_set('session.use_trans_sid', '0');
         ini_set('session.cookie_httponly', '1');
         ini_set('session.sid_length', '48');
+        $sessionDriver = strtolower(trim((string)(getenv('YSTEK_SESSION_DRIVER') ?: '')));
+        if ($sessionDriver === 'pgsql') {
+            // Mantém as sessões armazenadas pelo mesmo período do timeout de inatividade do Auth.
+            ini_set('session.gc_maxlifetime', '28800');
+            ini_set('session.gc_probability', '1');
+            ini_set('session.gc_divisor', '100');
+            if (!session_set_save_handler(new PostgresSessionHandler(), true)) {
+                throw new \RuntimeException('Não foi possível configurar o armazenamento PostgreSQL das sessões.');
+            }
+        } elseif ($sessionDriver !== '') {
+            throw new \RuntimeException('YSTEK_SESSION_DRIVER deve ser pgsql ou estar vazio.');
+        }
 
         session_set_cookie_params([
             'lifetime' => 0,
             'path' => '/',
-            'secure' => $secure,
+            'secure' => self::isSecureRequest(),
             'httponly' => true,
             'samesite' => 'Lax',
         ]);
@@ -54,9 +63,18 @@ final class Security
         header('X-Content-Type-Options: nosniff');
         header('Referrer-Policy: strict-origin-when-cross-origin');
         header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
-        if ($secure = ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? null) == 443))) {
+        if (self::isSecureRequest()) {
             header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
         }
+    }
+
+    private static function isSecureRequest(): bool
+    {
+        $forwardedProto = strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''), 2)[0]));
+
+        return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (($_SERVER['SERVER_PORT'] ?? null) == 443)
+            || $forwardedProto === 'https';
     }
 
     /** Garante um token CSRF estável durante a sessão atual. */
@@ -98,13 +116,11 @@ final class Security
         $token = (string)($_COOKIE[$name] ?? '');
         if ($token === '' || !preg_match('/^[a-f0-9]{64}$/', $token)) {
             $token = bin2hex(random_bytes(32));
-            $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-                || (($_SERVER['SERVER_PORT'] ?? null) == 443);
             if (PHP_SAPI !== 'cli') {
                 setcookie($name, $token, [
                     'expires' => time() + 86400,
                     'path' => '/',
-                    'secure' => $secure,
+                    'secure' => self::isSecureRequest(),
                     'httponly' => true,
                     'samesite' => 'Lax',
                 ]);

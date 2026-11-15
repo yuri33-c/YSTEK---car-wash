@@ -251,3 +251,13 @@ CREATE TABLE IF NOT EXISTS vehicle_damages (
 
 CREATE INDEX IF NOT EXISTS idx_vehicle_checkins_tenant_order ON vehicle_checkins(tenant_id, service_order_id);
 CREATE INDEX IF NOT EXISTS idx_vehicle_damages_tenant_order ON vehicle_damages(tenant_id, service_order_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ystek_sessions (
+    session_id VARCHAR(128) PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ystek_sessions_updated_at_idx
+    ON ystek_sessions (updated_at);
