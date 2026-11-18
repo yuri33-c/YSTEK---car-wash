@@ -171,7 +171,7 @@ class OperationalController extends TPage
 
     private function renderOrderPicker(): void
     {
-        $rows = '';
+        $cards = '';
         try {
             TTransaction::open();
             $pdo = TTransaction::get();
@@ -179,7 +179,10 @@ class OperationalController extends TPage
             $clientName = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_orders', 'client_name_snapshot') ? 'so.client_name_snapshot' : 'NULL::TEXT';
             $vehiclePlate = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_orders', 'vehicle_plate_snapshot') ? 'so.vehicle_plate_snapshot' : 'NULL::TEXT';
             $vehicleDescription = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_orders', 'vehicle_desc_snapshot') ? 'so.vehicle_desc_snapshot' : 'NULL::TEXT';
-            $stmt = $pdo->prepare("SELECT so.id, {$orderNumber} AS order_number, so.status, so.entry_time, COALESCE(c.name, {$clientName}) AS client_name, COALESCE(v.plate, {$vehiclePlate}) AS plate, COALESCE(v.brand, {$vehicleDescription}) AS brand, v.model,
+            $stmt = $pdo->prepare("SELECT so.id, {$orderNumber} AS order_number, so.status, so.entry_time,
+                    COALESCE(NULLIF(c.name, ''), NULLIF({$clientName}, ''), 'Cliente não identificado') AS client_name,
+                    COALESCE(NULLIF(v.plate, ''), NULLIF({$vehiclePlate}, ''), 'Placa não informada') AS plate,
+                    COALESCE(NULLIF(TRIM(CONCAT_WS(' ', v.brand, v.model)), ''), NULLIF({$vehicleDescription}, ''), 'Veículo não identificado') AS vehicle_name,
                     (SELECT COUNT(*) FROM vehicle_checkins vc WHERE vc.service_order_id = so.id AND vc.tenant_id = so.tenant_id) AS checkin_count
                 FROM service_orders so
                 LEFT JOIN clients c ON c.id = so.client_id AND c.tenant_id = so.tenant_id
@@ -190,26 +193,37 @@ class OperationalController extends TPage
             foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $r) {
                 $status = OrderStatus::normalize((string)$r['status']);
                 $done = (int)$r['checkin_count'] > 0;
-                $rows .= '<tr><td><strong>' . $this->e(OrderIdentity::label($r)) . '</strong></td>'
-                    . '<td>' . $this->e((string)($r['client_name'] ?? '—')) . '</td>'
-                    . '<td>' . $this->e(trim(($r['plate'] ?? '') . ' · ' . ($r['brand'] ?? '') . ' ' . ($r['model'] ?? ''), ' ·')) . '</td>'
-                    . '<td>' . $this->e(date('d/m/Y H:i', strtotime((string)$r['entry_time']))) . '</td>'
-                    . '<td><span class="badge ' . OrderStatus::badgeClass((string)$r['status']) . '">' . $this->e($status) . '</span></td>'
-                    . '<td>' . ($done ? '<span class="badge badge-finalizado">Feito</span>' : '<span class="badge badge-pendente">Pendente</span>') . '</td>'
-                    . '<td><a class="btn btn-primary btn-sm" href="index.php?class=OperationalController&order_id=' . rawurlencode((string)$r['id']) . '">' . ($done ? 'Ver check-in' : 'Abrir check-in') . '</a></td></tr>';
+                $orderLabel = OrderIdentity::label($r);
+                $entryDate = !empty($r['entry_time']) ? date('d/m/Y · H:i', strtotime((string)$r['entry_time'])) : 'Data não informada';
+                $cards .= '<article class="checkin-order-card">'
+                    . '<div class="checkin-order-card-top"><span class="checkin-order-number">O.S. ' . $this->e($orderLabel) . '</span>'
+                    . '<span class="badge ' . OrderStatus::badgeClass((string)$r['status']) . '">' . $this->e($status) . '</span></div>'
+                    . '<div class="checkin-order-client"><span>CLIENTE</span><strong>' . $this->e($r['client_name']) . '</strong></div>'
+                    . '<div class="checkin-order-vehicle"><span>VEÍCULO</span><strong>' . $this->e($r['vehicle_name']) . '</strong><small>' . $this->e($r['plate']) . '</small></div>'
+                    . '<div class="checkin-order-card-bottom"><span class="checkin-order-date">' . $this->e($entryDate) . '</span>'
+                    . '<span class="checkin-state ' . ($done ? 'is-done' : 'is-pending') . '">' . ($done ? 'Check-in registrado' : 'Check-in pendente') . '</span></div>'
+                    . '<a class="btn btn-primary checkin-order-action" href="index.php?class=OperationalController&order_id=' . rawurlencode((string)$r['id']) . '">' . ($done ? 'Ver / editar check-in' : 'Iniciar check-in') . '</a>'
+                    . '</article>';
             }
             TTransaction::close();
         } catch (\Throwable $e) {
             try { TTransaction::close(); } catch (\Throwable $ignore) {}
             error_log('Operational picker error: ' . $e->getMessage());
-        }
-        if ($rows === '') {
-            echo '<div class="panel"><div class="panel-body empty-state"><strong>Nenhuma O.S. encontrada.</strong><span>Crie um agendamento para registrar o check-in do veículo.</span></div></div>';
+            echo '<div class="panel"><div class="panel-body empty-state"><strong>Não foi possível carregar os atendimentos.</strong><span>Atualize a página. Se o problema continuar, procure o administrador da unidade.</span></div></div>';
             return;
         }
-        echo '<div class="page-heading"><div><span class="eyebrow">OPERAÇÃO</span><h1>Check-in &amp; Checklist</h1><p>Escolha o atendimento para registrar a entrada do veículo (km, combustível, acessórios e avarias).</p></div></div>'
-            . '<div class="panel"><div class="panel-header"><div><div class="panel-title">Atendimentos recentes</div><div class="panel-subtitle">Últimas 30 O.S. desta empresa, de qualquer data.</div></div></div>'
-            . '<div class="panel-body table-body-compact"><div class="table-responsive"><table class="table-system"><thead><tr><th>O.S.</th><th>Cliente</th><th>Veículo</th><th>Entrada</th><th>Status</th><th>Check-in</th><th>Ação</th></tr></thead><tbody>' . $rows . '</tbody></table></div></div></div>';
+
+        if ($cards === '') {
+            echo '<div class="operational-page checkin-picker-page"><div class="page-heading"><div><span class="eyebrow">OPERAÇÃO</span><h1>Check-in &amp; Checklist</h1><p>Registre a condição do veículo antes de iniciar o serviço.</p></div></div>'
+                . '<div class="panel"><div class="panel-body empty-state"><strong>Nenhuma ordem de serviço encontrada.</strong><span>Crie um atendimento na Agenda ou em Ordens de Serviço para iniciar o check-in.</span><a class="btn btn-primary" href="index.php?class=OrdersController">Abrir Ordens de Serviço</a></div></div></div>';
+            return;
+        }
+
+        $cardCount = substr_count($cards, '<article class="checkin-order-card">');
+        echo '<div class="operational-page checkin-picker-page">'
+            . '<div class="page-heading"><div><span class="eyebrow">OPERAÇÃO</span><h1>Check-in &amp; Checklist</h1><p>Escolha o atendimento e registre a condição do veículo antes de iniciar o serviço.</p></div></div>'
+            . '<section class="panel checkin-picker-panel"><div class="panel-header"><div><div class="panel-title">Atendimentos recentes</div><div class="panel-subtitle">Últimas 30 ordens de serviço desta empresa.</div></div><span class="checkin-picker-count">' . $cardCount . ' atendimento(s)</span></div>'
+            . '<div class="panel-body"><div class="checkin-order-list">' . $cards . '</div></div></section></div>';
     }
 
     public function show()
@@ -288,13 +302,17 @@ class OperationalController extends TPage
         $observations = $this->e($checkin->observations ?? '');
         $isChecked = static function ($value): string { return !empty($value) ? ' checked' : ''; };
 
-        $damageRows = '';
+        $damageCards = '';
         foreach ($damages as $damage) {
             $severityClass = $damage->severity === 'Grave' ? 'badge-cancelado' : ($damage->severity === 'Média' ? 'badge-pendente' : 'badge-andamento');
-            $damageRows .= '<tr><td><strong>' . $this->e($damage->area) . '</strong><div class="table-secondary">' . $this->e($damage->damage_type) . '</div></td><td><span class="badge ' . $severityClass . '">' . $this->e($damage->severity) . '</span></td><td>' . $this->e($damage->description ?: 'Sem descrição') . '</td><td class="actions-cell"><form method="POST" onsubmit="return confirm(\'Remover esta avaria?\')">' . \App\Core\Security::csrfInput() . '<input type="hidden" name="action" value="delete_damage"><input type="hidden" name="order_id" value="' . $this->e($orderId) . '"><input type="hidden" name="damage_id" value="' . $this->e($damage->id) . '"><button class="btn btn-danger btn-sm">Remover</button></form></td></tr>';
+            $damageCards .= '<article class="damage-card">'
+                . '<div class="damage-card-heading"><div><strong>' . $this->e($damage->area) . '</strong><span>' . $this->e($damage->damage_type) . '</span></div><span class="badge ' . $severityClass . '">' . $this->e($damage->severity) . '</span></div>'
+                . '<p>' . $this->e($damage->description ?: 'Sem descrição adicional.') . '</p>'
+                . '<form method="POST" class="damage-card-actions" onsubmit="return confirm(\'Remover esta avaria?\')">' . \App\Core\Security::csrfInput() . '<input type="hidden" name="action" value="delete_damage"><input type="hidden" name="order_id" value="' . $this->e($orderId) . '"><input type="hidden" name="damage_id" value="' . $this->e($damage->id) . '"><button class="btn btn-danger btn-sm" type="submit">Remover registro</button></form>'
+                . '</article>';
         }
-        if ($damageRows === '') {
-            $damageRows = '<tr><td colspan="4" class="empty-state"><strong>Nenhuma avaria registrada</strong><span>Faça a inspeção visual antes de iniciar o serviço.</span></td></tr>';
+        if ($damageCards === '') {
+            $damageCards = '<div class="damage-empty"><strong>Nenhuma avaria registrada</strong><span>Registre qualquer risco, amassado ou dano visível antes de iniciar o serviço.</span></div>';
         }
 
         $historyPanel = '';
@@ -302,21 +320,52 @@ class OperationalController extends TPage
             if ($historyRows === '') {
                 $historyRows = '<tr><td colspan="5" class="empty-state"><strong>Sem histórico anterior</strong><span>Esta pode ser a primeira passagem deste veículo.</span></td></tr>';
             }
-            $historyPanel = '<div class="panel"><div class="panel-header"><div><div class="panel-title">Histórico do veículo</div><div class="panel-subtitle">Recurso Premium · últimas passagens desta placa.</div></div></div><div class="panel-body table-body-compact"><div class="table-responsive"><table class="table-system"><thead><tr><th>O.S.</th><th>Data</th><th>Status</th><th>Avarias</th><th>Check-in</th></tr></thead><tbody>' . $historyRows . '</tbody></table></div></div></div>';
+            $historyPanel = '<section class="panel inspection-history-panel"><div class="panel-header"><div><div class="panel-title">Histórico do veículo</div><div class="panel-subtitle">Últimas passagens desta placa.</div></div></div><div class="panel-body table-body-compact"><div class="table-responsive"><table class="table-system"><thead><tr><th>O.S.</th><th>Data</th><th>Status</th><th>Avarias</th><th>Check-in</th></tr></thead><tbody>' . $historyRows . '</tbody></table></div></div></section>';
         }
 
-        $status = $this->e($order->status);
+        $status = OrderStatus::normalize((string)$order->status);
         $orderShort = $this->e(ltrim(OrderIdentity::label($order), '#'));
-        echo '<div class="page-heading"><div><a class="back-link" href="index.php?class=AgendaController">← Voltar para Agenda</a><div class="eyebrow">Operação</div><h1>Check-in & Checklist</h1><p>O.S. #' . $orderShort . ' · ' . $this->e($client->name) . ' · ' . $this->e($vehicle->plate) . '</p></div><div class="heading-actions"><span class="badge badge-andamento">' . $status . '</span></div></div>
-        <div class="inspection-hero"><div><span>VEÍCULO</span><strong>' . $this->e($vehicle->brand . ' ' . $vehicle->model) . '</strong><small>' . $this->e($vehicle->plate) . ' · ' . $this->e($vehicle->color) . ' · ' . $this->e($vehicle->category) . '</small></div><div><span>CLIENTE</span><strong>' . $this->e($client->name) . '</strong><small>' . $this->e($client->phone ?: 'Telefone não informado') . '</small></div><div><span>O.S.</span><strong>#' . $orderShort . '</strong><small>R$ ' . number_format((float)$order->total_amount, 2, ',', '.') . '</small></div></div>
-        <div class="inspection-grid">
-            <section class="panel"><div class="panel-header"><div><div class="panel-title">01 · Entrada do veículo</div><div class="panel-subtitle">Registre a condição de chegada antes de iniciar o serviço.</div></div></div><div class="panel-body"><form method="POST">' . \App\Core\Security::csrfInput() . '<input type="hidden" name="action" value="save_checkin"><input type="hidden" name="order_id" value="' . $this->e($orderId) . '"><div class="form-grid cols-2"><div class="form-group"><label>Quilometragem</label><input class="form-control" type="number" min="0" name="odometer" value="' . $odometer . '" placeholder="Ex.: 45890"></div><div class="form-group"><label>Combustível (%)</label><input class="form-control" type="number" min="0" max="100" name="fuel_level" value="' . $fuel . '" placeholder="Ex.: 50"></div></div><div class="checklist-options"><label><input type="checkbox" name="key_received"' . $isChecked($checkin->key_received ?? true) . '> Chave recebida</label><label><input type="checkbox" name="spare_tire"' . $isChecked($checkin->spare_tire ?? false) . '> Estepe presente</label><label><input type="checkbox" name="jack"' . $isChecked($checkin->jack ?? false) . '> Macaco presente</label><label><input type="checkbox" name="wheel_wrench"' . $isChecked($checkin->wheel_wrench ?? false) . '> Chave de roda</label><label><input type="checkbox" name="documents_received"' . $isChecked($checkin->documents_received ?? false) . '> Documentos recebidos</label></div><div class="form-group"><label>Acessórios / objetos deixados no veículo</label><textarea class="form-control" name="accessories" rows="3" placeholder="Ex.: tapetes, cadeirinha, carregador, objetos pessoais...">' . $accessories . '</textarea></div><div class="form-group"><label>Observações de entrada</label><textarea class="form-control" name="observations" rows="4" placeholder="Condições gerais, instruções do cliente, cuidados especiais...">' . $observations . '</textarea></div><div class="inspection-actions"><button class="btn btn-primary btn-lg" type="submit">' . ($checkin ? 'Atualizar check-in' : 'Confirmar entrada') . '</button></div></form></div></section>
-            <section class="panel"><div class="panel-header"><div><div class="panel-title">02 · Registrar avaria</div><div class="panel-subtitle">Documente qualquer dano visível antes da execução.</div></div></div><div class="panel-body"><form method="POST">' . \App\Core\Security::csrfInput() . '<input type="hidden" name="action" value="add_damage"><input type="hidden" name="order_id" value="' . $this->e($orderId) . '"><div class="form-grid cols-2"><div class="form-group"><label>Área<span class=req>&nbsp;*</span></label><select class="form-control" name="area" required><option value="">Selecione</option><option>Frente</option><option>Traseira</option><option>Lateral esquerda</option><option>Lateral direita</option><option>Teto</option><option>Rodas</option><option>Vidros</option><option>Interior</option></select></div><div class="form-group"><label>Tipo<span class=req>&nbsp;*</span></label><select class="form-control" name="damage_type" required><option value="">Selecione</option><option>Risco</option><option>Arranhão</option><option>Amassado</option><option>Trinca</option><option>Mancha</option><option>Pintura</option><option>Outro</option></select></div><div class="form-group"><label>Gravidade</label><select class="form-control" name="severity"><option>Leve</option><option>Média</option><option>Grave</option></select></div><div class="form-group span-2"><label>Descrição</label><input class="form-control" name="description" maxlength="500" placeholder="Ex.: risco horizontal na porta dianteira direita"></div></div><div class="inspection-actions"><button class="btn btn-secondary" type="submit">+ Adicionar avaria</button></div></form></div></section>
-        </div>
-        <div class="panel"><div class="panel-header"><div><div class="panel-title">03 · Avarias registradas</div><div class="panel-subtitle">Histórico vinculado a esta O.S.</div></div><span class="badge badge-pendente">' . count($damages) . ' registro(s)</span></div><div class="panel-body table-body-compact"><div class="table-responsive"><table class="table-system"><thead><tr><th>Área / tipo</th><th>Gravidade</th><th>Descrição</th><th>Ações</th></tr></thead><tbody>' . $damageRows . '</tbody></table></div></div></div>
-        ' . $historyPanel . '
-        <style>
-            .inspection-hero{display:grid;grid-template-columns:1.4fr 1fr .65fr;gap:12px;margin-bottom:16px}.inspection-hero>div{background:#fff;border:1px solid var(--border);border-radius:6px;padding:14px 16px;box-shadow:0 2px 8px rgba(20,50,80,.03)}.inspection-hero span{display:block;color:#728392;font-size:8px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.inspection-hero strong{display:block;color:#173a58;font-size:14px;margin-top:5px}.inspection-hero small{display:block;color:#8996a1;font-size:9px;margin-top:3px}.inspection-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-bottom:16px}.checklist-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:5px 0 15px;padding:12px;border:1px solid var(--border-light);background:#fbfcfd;border-radius:5px}.checklist-options label{display:flex;align-items:center;gap:7px;color:#465d70;font-size:10px}.checklist-options input{accent-color:#1478cf}.inspection-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:7px}.modal-open{overflow:hidden}@media(max-width:1000px){.inspection-grid,.inspection-hero{grid-template-columns:1fr}}@media(max-width:650px){.checklist-options{grid-template-columns:1fr}.inspection-actions .btn{width:100%}}
-        </style>';
+        $vehicleName = trim((string)$vehicle->brand . ' ' . (string)$vehicle->model);
+        $vehicleMeta = array_filter([
+            trim('Placa ' . (string)$vehicle->plate),
+            trim((string)($vehicle->color ?? '')),
+            trim((string)($vehicle->category ?? '')),
+        ], static fn(string $value): bool => $value !== '' && $value !== 'Placa');
+        $checkinStatusLabel = $checkin ? 'Entrada registrada' : 'Aguardando check-in';
+        $checkinStatusClass = $checkin ? 'is-done' : 'is-pending';
+        $entryButtonLabel = $checkin ? 'Salvar alterações do check-in' : 'Confirmar entrada e iniciar serviço';
+
+        echo '<div class="operational-page inspection-page">'
+            . '<div class="page-heading inspection-page-heading"><div><a class="back-link" href="index.php?class=AgendaController">← Voltar para Agenda</a><span class="eyebrow">OPERAÇÃO · O.S. #' . $orderShort . '</span><h1>Check-in do veículo</h1><p>Confira os dados e registre a condição do veículo antes de começar o atendimento.</p></div><div class="inspection-heading-status"><span class="badge ' . OrderStatus::badgeClass((string)$order->status) . '">' . $this->e($status) . '</span><span class="checkin-state ' . $checkinStatusClass . '">' . $checkinStatusLabel . '</span></div></div>'
+            . '<section class="inspection-summary" aria-label="Resumo do atendimento">'
+            . '<article class="inspection-summary-card inspection-summary-vehicle"><span>VEÍCULO</span><strong>' . $this->e($vehicleName !== '' ? $vehicleName : 'Veículo') . '</strong><small>' . $this->e(implode(' · ', $vehicleMeta)) . '</small></article>'
+            . '<article class="inspection-summary-card"><span>CLIENTE</span><strong>' . $this->e($client->name) . '</strong><small>' . $this->e($client->phone ?: 'Telefone não informado') . '</small></article>'
+            . '<article class="inspection-summary-card"><span>ORDEM DE SERVIÇO</span><strong>#' . $orderShort . '</strong><small>Valor: R$ ' . number_format((float)$order->total_amount, 2, ',', '.') . '</small></article>'
+            . '</section>'
+            . '<div class="inspection-grid">'
+            . '<section class="panel inspection-panel inspection-entry-panel"><div class="panel-header"><div><div class="panel-title">01 · Entrada do veículo</div><div class="panel-subtitle">Registre quilometragem, combustível, itens recebidos e observações.</div></div><span class="inspection-step-number">01</span></div>'
+            . '<div class="panel-body"><form method="POST" class="inspection-form">' . \App\Core\Security::csrfInput() . '<input type="hidden" name="action" value="save_checkin"><input type="hidden" name="order_id" value="' . $this->e($orderId) . '">'
+            . '<div class="form-grid cols-2 inspection-fields"><div class="form-group"><label for="checkin_odometer">Quilometragem (km)</label><input id="checkin_odometer" class="form-control" type="number" min="0" inputmode="numeric" name="odometer" value="' . $odometer . '" placeholder="Ex.: 45890"></div><div class="form-group"><label for="checkin_fuel">Combustível (%)</label><input id="checkin_fuel" class="form-control" type="number" min="0" max="100" inputmode="numeric" name="fuel_level" value="' . $fuel . '" placeholder="Ex.: 50"></div></div>'
+            . '<fieldset class="checklist-fieldset"><legend>Itens recebidos junto com o veículo</legend><div class="checklist-options">'
+            . '<label class="checklist-option"><input type="checkbox" name="key_received"' . $isChecked($checkin->key_received ?? true) . '><span>Chave recebida</span></label>'
+            . '<label class="checklist-option"><input type="checkbox" name="spare_tire"' . $isChecked($checkin->spare_tire ?? false) . '><span>Estepe presente</span></label>'
+            . '<label class="checklist-option"><input type="checkbox" name="jack"' . $isChecked($checkin->jack ?? false) . '><span>Macaco presente</span></label>'
+            . '<label class="checklist-option"><input type="checkbox" name="wheel_wrench"' . $isChecked($checkin->wheel_wrench ?? false) . '><span>Chave de roda</span></label>'
+            . '<label class="checklist-option"><input type="checkbox" name="documents_received"' . $isChecked($checkin->documents_received ?? false) . '><span>Documentos recebidos</span></label>'
+            . '</div></fieldset>'
+            . '<div class="form-group"><label for="checkin_accessories">Acessórios e objetos deixados no veículo</label><textarea id="checkin_accessories" class="form-control" name="accessories" rows="3" placeholder="Ex.: tapetes, cadeirinha, carregador, objetos pessoais...">' . $accessories . '</textarea><small class="field-help">Registre itens que devem permanecer no veículo durante o serviço.</small></div>'
+            . '<div class="form-group"><label for="checkin_observations">Observações de entrada</label><textarea id="checkin_observations" class="form-control" name="observations" rows="4" placeholder="Condições gerais, instruções do cliente, cuidados especiais...">' . $observations . '</textarea></div>'
+            . '<div class="inspection-actions"><button class="btn btn-primary btn-lg" type="submit">' . $entryButtonLabel . '</button></div></form></div></section>'
+            . '<section class="panel inspection-panel inspection-damage-panel"><div class="panel-header"><div><div class="panel-title">02 · Registrar avaria</div><div class="panel-subtitle">Documente qualquer dano visível e evite dúvidas na retirada.</div></div><span class="inspection-step-number">02</span></div>'
+            . '<div class="panel-body"><form method="POST" class="inspection-form damage-form">' . \App\Core\Security::csrfInput() . '<input type="hidden" name="action" value="add_damage"><input type="hidden" name="order_id" value="' . $this->e($orderId) . '">'
+            . '<div class="form-grid cols-2"><div class="form-group"><label for="damage_area">Área<span class=req>&nbsp;*</span></label><select id="damage_area" class="form-control" name="area" required><option value="">Selecione a área</option><option>Frente</option><option>Traseira</option><option>Lateral esquerda</option><option>Lateral direita</option><option>Teto</option><option>Rodas</option><option>Vidros</option><option>Interior</option></select></div>'
+            . '<div class="form-group"><label for="damage_type">Tipo<span class=req>&nbsp;*</span></label><select id="damage_type" class="form-control" name="damage_type" required><option value="">Selecione o tipo</option><option>Risco</option><option>Arranhão</option><option>Amassado</option><option>Trinca</option><option>Mancha</option><option>Pintura</option><option>Outro</option></select></div>'
+            . '<div class="form-group"><label for="damage_severity">Gravidade</label><select id="damage_severity" class="form-control" name="severity"><option>Leve</option><option>Média</option><option>Grave</option></select></div>'
+            . '<div class="form-group span-2"><label for="damage_description">Descrição</label><input id="damage_description" class="form-control" name="description" maxlength="500" placeholder="Ex.: risco horizontal na porta dianteira direita"></div></div>'
+            . '<div class="inspection-actions"><button class="btn btn-secondary" type="submit">+ Adicionar avaria</button></div></form></div></section></div>'
+            . '<section class="panel inspection-damages-panel"><div class="panel-header"><div><div class="panel-title">03 · Avarias registradas</div><div class="panel-subtitle">Danos vinculados a esta ordem de serviço.</div></div><span class="badge badge-pendente">' . count($damages) . ' registro(s)</span></div><div class="panel-body"><div class="damage-list">' . $damageCards . '</div></div></section>'
+            . $historyPanel
+            . '</div>';
+
     }
 }

@@ -2853,3 +2853,150 @@ body.theme-superadmin .pagination-caption { color: var(--sa-muted, #8ea1bf); }
     body.theme-superadmin .mobile-bottom-item { color: #9eb0c9; }
     body.theme-superadmin .mobile-bottom-item.active { background: rgba(76, 141, 255, .15); color: #8bb7ff; }
 }
+
+/* ======================================================================
+   CHECK-IN & CHECKLIST — fluxo mobile-first revisado
+   Escopo isolado para não alterar as demais telas do YSTEK.
+   ====================================================================== */
+.operational-page,
+.operational-page * { box-sizing: border-box; }
+.operational-page { width: 100%; max-width: 100%; min-width: 0; }
+.operational-page .page-heading { align-items: flex-start; gap: 16px; }
+.operational-page .page-heading > div:first-child { min-width: 0; }
+.operational-page .page-heading h1 { overflow-wrap: anywhere; }
+
+.checkin-picker-panel .panel-header { align-items: center; gap: 12px; }
+.checkin-picker-count { flex: 0 0 auto; color: var(--tn-text-2, #6b7c8f); font-size: 11px; font-weight: 750; }
+.checkin-order-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 14px; width: 100%; min-width: 0; }
+.checkin-order-card { display: flex; flex-direction: column; gap: 13px; min-width: 0; padding: 17px; background: var(--tn-surface, #fff); border: 1px solid var(--tn-border, #dce5ed); border-radius: var(--tn-radius, 13px); box-shadow: 0 3px 12px rgba(24, 52, 78, .055); }
+.checkin-order-card-top,
+.checkin-order-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.checkin-order-number { color: var(--tn-blue, #176aa8); font-size: 12px; font-weight: 850; letter-spacing: .03em; }
+.checkin-order-client,
+.checkin-order-vehicle { display: grid; gap: 4px; min-width: 0; }
+.checkin-order-client > span,
+.checkin-order-vehicle > span,
+.inspection-summary-card > span { color: var(--tn-text-2, #718399); font-size: 9px; font-weight: 850; letter-spacing: .09em; }
+.checkin-order-client strong,
+.checkin-order-vehicle strong { color: var(--tn-text, #173a58); font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
+.checkin-order-vehicle small { color: var(--tn-text-2, #718399); font-size: 12px; }
+.checkin-order-date { color: var(--tn-text-2, #718399); font-size: 11px; }
+.checkin-state { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border-radius: 999px; font-size: 10px; font-weight: 800; line-height: 1.2; }
+.checkin-state::before { content: ''; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
+.checkin-state.is-done { color: #167348; background: #e9f7ef; }
+.checkin-state.is-pending { color: #8a5a0a; background: #fff5df; }
+.checkin-order-action { width: 100%; min-height: 46px; justify-content: center; margin-top: auto; }
+
+.inspection-page-heading { display: flex; align-items: flex-end; justify-content: space-between; }
+.inspection-page-heading .back-link { display: inline-flex; margin-bottom: 12px; }
+.inspection-heading-status { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.inspection-summary { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(160px, .8fr); gap: 12px; margin-bottom: 16px; min-width: 0; }
+.inspection-summary-card { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 16px; background: var(--tn-surface, #fff); border: 1px solid var(--tn-border, #dce5ed); border-radius: var(--tn-radius, 13px); box-shadow: 0 2px 9px rgba(20, 50, 80, .04); }
+.inspection-summary-card strong { color: var(--tn-text, #173a58); font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
+.inspection-summary-card small { color: var(--tn-text-2, #718399); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.inspection-grid { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr); gap: 16px; align-items: start; margin-bottom: 16px; }
+.inspection-panel { min-width: 0; overflow: hidden; }
+.inspection-panel .panel-header { align-items: flex-start; gap: 12px; }
+.inspection-panel .panel-header > div { min-width: 0; }
+.inspection-step-number { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; border-radius: 10px; color: var(--tn-blue, #176aa8); background: var(--tn-blue-soft, #edf5fc); font-size: 12px; font-weight: 900; }
+.inspection-form { width: 100%; min-width: 0; }
+.inspection-fields { margin-bottom: 8px; }
+.inspection-form .form-group { min-width: 0; }
+.inspection-form .form-control { min-width: 0; }
+.checklist-fieldset { min-width: 0; margin: 8px 0 18px; padding: 13px; border: 1px solid var(--tn-border, #dce5ed); border-radius: 12px; }
+.checklist-fieldset legend { padding: 0 6px; color: var(--tn-text, #173a58); font-size: 12px; font-weight: 800; }
+.checklist-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; background: transparent; }
+.checklist-option { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 48px; padding: 10px 11px; border: 1px solid var(--tn-border, #dce5ed); border-radius: 10px; background: var(--tn-surface, #fff); color: var(--tn-text, #263d53); font-size: 12px; font-weight: 650; line-height: 1.3; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.checklist-option:has(input:checked) { border-color: var(--tn-blue, #176aa8); background: var(--tn-blue-soft, #edf5fc); }
+.checklist-option input { flex: 0 0 20px; width: 20px; height: 20px; min-height: 20px; margin: 0; accent-color: var(--tn-blue, #176aa8); }
+.checklist-option span { min-width: 0; overflow-wrap: anywhere; }
+.inspection-form .field-help { display: block; margin-top: 6px; line-height: 1.45; }
+.inspection-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.inspection-actions .btn { min-height: 46px; }
+.damage-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 12px; }
+.damage-card { display: grid; gap: 10px; min-width: 0; padding: 14px; border: 1px solid var(--tn-border, #dce5ed); border-radius: 12px; background: var(--tn-surface, #fff); }
+.damage-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; }
+.damage-card-heading > div { display: grid; gap: 3px; min-width: 0; }
+.damage-card-heading strong { color: var(--tn-text, #173a58); font-size: 13px; overflow-wrap: anywhere; }
+.damage-card-heading > div > span { color: var(--tn-text-2, #718399); font-size: 11px; }
+.damage-card p { margin: 0; color: var(--tn-text, #334b61); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.damage-card-actions { display: flex; justify-content: flex-end; }
+.damage-card-actions .btn { min-height: 40px; }
+.damage-empty { display: grid; gap: 5px; padding: 16px; border: 1px dashed var(--tn-border, #dce5ed); border-radius: 12px; background: var(--tn-surface-soft, #f7fafc); }
+.damage-empty strong { color: var(--tn-text, #173a58); font-size: 13px; }
+.damage-empty span { color: var(--tn-text-2, #718399); font-size: 12px; line-height: 1.45; }
+.inspection-damages-panel, .inspection-history-panel { min-width: 0; margin-bottom: 16px; }
+.inspection-damages-panel .panel-body { min-width: 0; }
+
+@media (max-width: 1100px) {
+    .inspection-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 780px) {
+    .operational-page { padding-bottom: 4px; }
+    .operational-page .page-heading { display: flex; flex-direction: column; align-items: stretch; gap: 10px; margin-bottom: 14px; }
+    .operational-page .page-heading h1 { font-size: clamp(23px, 6vw, 30px); line-height: 1.12; }
+    .operational-page .page-heading p { max-width: 54ch; font-size: 13px; line-height: 1.45; }
+    .checkin-picker-panel .panel-header { align-items: flex-start; flex-direction: column; }
+    .checkin-order-list, .damage-list { grid-template-columns: minmax(0, 1fr); }
+    .checkin-order-card { gap: 11px; padding: 15px; border-radius: 13px; }
+    .inspection-page-heading { display: grid !important; grid-template-columns: minmax(0, 1fr); }
+    .inspection-heading-status { justify-content: flex-start; }
+    .inspection-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .inspection-summary-card { padding: 13px; border-radius: 12px; }
+    .inspection-summary-card.inspection-summary-vehicle { grid-column: 1 / -1; }
+    .inspection-summary-card strong { font-size: 13px; }
+    .inspection-grid { grid-template-columns: minmax(0, 1fr); gap: 13px; }
+    .inspection-panel { border-radius: 13px; }
+    .inspection-panel .panel-header { padding: 15px 14px; }
+    .inspection-panel .panel-body { padding: 14px; }
+    .inspection-panel .panel-title { font-size: 14px; }
+    .inspection-panel .panel-subtitle { font-size: 11px; line-height: 1.45; }
+    .inspection-fields { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 9px; }
+    .checklist-fieldset { padding: 11px; }
+    .checklist-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+    .checklist-option { min-height: 52px; padding: 9px; font-size: 11px; }
+    .inspection-form .form-group label { font-size: 12px; line-height: 1.3; }
+    .inspection-form input.form-control,
+    .inspection-form select.form-control,
+    .inspection-form textarea.form-control { min-height: 48px; font-size: 16px; }
+    .inspection-form textarea.form-control { min-height: 104px; }
+    .inspection-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+    .inspection-actions .btn { width: 100%; min-height: 50px; white-space: normal; }
+    .inspection-damages-panel .panel-header { gap: 8px; padding: 14px; }
+    .inspection-damages-panel .panel-body { padding: 13px; }
+    .damage-card { padding: 13px; }
+    .damage-card-actions .btn { width: 100%; min-height: 44px; }
+    .inspection-history-panel .panel-body { padding: 10px; }
+}
+@media (max-width: 380px) {
+    .inspection-summary { grid-template-columns: minmax(0, 1fr); }
+    .inspection-summary-card.inspection-summary-vehicle { grid-column: auto; }
+    .inspection-fields { grid-template-columns: minmax(0, 1fr) !important; }
+    .checklist-options { grid-template-columns: minmax(0, 1fr); }
+    .checklist-option { min-height: 48px; font-size: 12px; }
+    .checkin-order-card-top { align-items: flex-start; flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .checkin-order-card, .checkin-order-action, .checklist-option { transition: none !important; }
+}
+
+/* Ajustes finais de legibilidade no check-in e na prévia do WhatsApp. */
+@media (max-width: 780px) {
+    .operational-page .form-grid.inspection-fields {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    .whatsapp-preview p { white-space: pre-line; overflow-wrap: anywhere; }
+    .whatsapp-preview small { display: block; margin-top: 8px; color: var(--tn-text-2, #718399); font-size: 11px; line-height: 1.45; }
+}
+@media (max-width: 380px) {
+    .operational-page .form-grid.inspection-fields {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+}
+.whatsapp-preview p { white-space: pre-line; overflow-wrap: anywhere; }
+.whatsapp-preview small { display: block; margin-top: 8px; color: var(--tn-text-2, #718399); font-size: 11px; line-height: 1.45; }
+.completion-modal .modal-footer .btn-whatsapp { min-width: 180px; }
+@media (max-width: 780px) {
+    .completion-modal .modal-footer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .completion-modal .modal-footer .btn { width: 100%; min-height: 48px; }
+}

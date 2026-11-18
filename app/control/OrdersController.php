@@ -687,64 +687,152 @@ class OrdersController extends TPage
         $completedModal = '';
         $completedId = trim((string)($_GET['completed_id'] ?? ''));
         if ($completedId !== '') {
-            TTransaction::open();
-            $completed = ServiceOrder::getObjects('id = :id AND tenant_id = :tenant_id', [':id' => $completedId, ':tenant_id' => $tenantId]);
-            $tenant = new \App\Model\Tenant($tenantId);
-            $completedClient = [];
-            $completedVehicle = [];
-            $completedService = [];
+            $completed = [];
+            $tenant = null;
+            $settings = [];
+            $c = null;
+            $v = null;
+            $s = null;
             $completedServiceName = '';
             $completedServiceDescription = '';
-            if ($completed) {
-                $completedClient = Client::getObjects('id = :id AND tenant_id = :t', [':id' => $completed[0]->client_id, ':t' => $tenantId]);
-                $completedVehicle = Vehicle::getObjects('id = :id AND tenant_id = :t', [':id' => $completed[0]->vehicle_id, ':t' => $tenantId]);
-                $items = ServiceOrderItem::getObjects('service_order_id = :id', [':id' => $completedId]);
-                if ($items) {
-                    if (!empty($items[0]->service_id)) {
-                        $completedService = Service::getObjects('id = :id AND tenant_id = :t', [':id' => $items[0]->service_id, ':t' => $tenantId]);
+
+            try {
+                TTransaction::open();
+                $pdo = TTransaction::get();
+                $completed = ServiceOrder::getObjects(
+                    'id = :id AND tenant_id = :tenant_id',
+                    [':id' => $completedId, ':tenant_id' => $tenantId]
+                );
+                $tenant = new \App\Model\Tenant($tenantId);
+
+                // A configuração é isolada por empresa. A mensagem salva aqui
+                // passa a ser a fonte do texto que será aberto no WhatsApp.
+                $settingsStmt = $pdo->prepare('SELECT whatsapp_message, whatsapp_number
+                    FROM public.tenant_settings WHERE tenant_id = :tenant_id LIMIT 1');
+                $settingsStmt->execute([':tenant_id' => $tenantId]);
+                $settings = $settingsStmt->fetch(\PDO::FETCH_ASSOC) ?: [];
+
+                if (!empty($completed)) {
+                    $o = $completed[0];
+                    if (!empty($o->client_id)) {
+                        $clientsFound = Client::getObjects(
+                            'id = :id AND tenant_id = :t',
+                            [':id' => $o->client_id, ':t' => $tenantId]
+                        );
+                        $c = $clientsFound[0] ?? null;
                     }
-                    $snapshotColumns = [];
-                    foreach (['service_name_snapshot', 'service_description_snapshot'] as $column) {
-                        if (\App\Service\RecordDeletionService::hasColumn(TTransaction::get(), 'service_order_items', $column)) {
-                            $snapshotColumns[] = $column;
+                    if (!empty($o->vehicle_id)) {
+                        $vehiclesFound = Vehicle::getObjects(
+                            'id = :id AND tenant_id = :t',
+                            [':id' => $o->vehicle_id, ':t' => $tenantId]
+                        );
+                        $v = $vehiclesFound[0] ?? null;
+                    }
+
+                    $items = ServiceOrderItem::getObjects('service_order_id = :id', [':id' => $completedId]);
+                    if ($items) {
+                        if (!empty($items[0]->service_id)) {
+                            $servicesFound = Service::getObjects(
+                                'id = :id AND tenant_id = :t',
+                                [':id' => $items[0]->service_id, ':t' => $tenantId]
+                            );
+                            $s = $servicesFound[0] ?? null;
+                        }
+
+                        $snapshotColumns = [];
+                        foreach (['service_name_snapshot', 'service_description_snapshot'] as $column) {
+                            if (\App\Service\RecordDeletionService::hasColumn($pdo, 'service_order_items', $column)) {
+                                $snapshotColumns[] = $column;
+                            }
+                        }
+                        if ($snapshotColumns) {
+                            $itemHistory = $pdo->prepare('SELECT ' . implode(', ', $snapshotColumns) . '
+                                FROM public.service_order_items WHERE id = :id');
+                            $itemHistory->execute([':id' => $items[0]->id]);
+                            $historyRow = $itemHistory->fetch(\PDO::FETCH_ASSOC) ?: [];
+                            $completedServiceName = (string)($historyRow['service_name_snapshot'] ?? '');
+                            $completedServiceDescription = (string)($historyRow['service_description_snapshot'] ?? '');
                         }
                     }
-                    if ($snapshotColumns) {
-                        $itemHistory = TTransaction::get()->prepare('SELECT ' . implode(', ', $snapshotColumns) . '
-                            FROM public.service_order_items WHERE id = :id');
-                        $itemHistory->execute([':id' => $items[0]->id]);
-                        $historyRow = $itemHistory->fetch(\PDO::FETCH_ASSOC) ?: [];
-                        $completedServiceName = (string)($historyRow['service_name_snapshot'] ?? '');
-                        $completedServiceDescription = (string)($historyRow['service_description_snapshot'] ?? '');
-                    }
                 }
+                TTransaction::close();
+            } catch (\Throwable $e) {
+                try { TTransaction::close(); } catch (\Throwable $ignore) {}
+                error_log('Order completion WhatsApp preparation failed: ' . $e->getMessage());
+                // A falha ao ler o modelo não pode esconder a confirmação da O.S.
+                $settings = [];
             }
-            TTransaction::close();
+
             if (!empty($completed)) {
                 $o = $completed[0];
-                $c = $completedClient[0] ?? null;
-                $v = $completedVehicle[0] ?? null;
-                $s = $completedService[0] ?? null;
-                $phone = $c ? (string)($c->phone ?? '') : '';
-                $vehicleText = $v ? trim((string)$v->brand . ' ' . (string)$v->model . ' · placa ' . (string)$v->plate) : 'seu veículo';
-                $message = WhatsAppService::readyMessage($c ? (string)$c->name : 'cliente', $vehicleText, (string)$tenant->name, (string)$o->id);
+                $clientName = trim((string)($c->name ?? $o->client_name_snapshot ?? '')) ?: 'cliente';
+                $phone = trim((string)($c->phone ?? $o->client_phone_snapshot ?? ''));
+                $vehicleBrand = trim((string)($v->brand ?? ''));
+                $vehicleModel = trim((string)($v->model ?? ''));
+                $vehiclePlate = trim((string)($v->plate ?? $o->vehicle_plate_snapshot ?? ''));
+                $vehicleDescription = trim($vehicleBrand . ' ' . $vehicleModel);
+                if ($vehicleDescription === '') {
+                    $vehicleDescription = trim((string)($o->vehicle_desc_snapshot ?? '')) ?: 'seu veículo';
+                }
+                $completedServiceLabel = trim((string)($s->name ?? ''));
+                if ($completedServiceLabel === '') {
+                    $completedServiceLabel = trim($completedServiceName) ?: 'Serviço';
+                }
+                $completedServiceDetails = trim((string)($s->description ?? ''));
+                if ($completedServiceDetails === '') {
+                    $completedServiceDetails = trim($completedServiceDescription);
+                }
+                $formattedValue = 'R$ ' . number_format((float)$o->total_amount, 2, ',', '.');
+                $completedAtRaw = trim((string)($o->completion_time ?? ''));
+                try {
+                    $completedAt = $completedAtRaw !== ''
+                        ? new \DateTimeImmutable($completedAtRaw, new \DateTimeZone('America/Sao_Paulo'))
+                        : new \DateTimeImmutable('now', new \DateTimeZone('America/Sao_Paulo'));
+                } catch (\Throwable $dateError) {
+                    $completedAt = new \DateTimeImmutable('now', new \DateTimeZone('America/Sao_Paulo'));
+                }
+
+                $businessAddress = array_filter([
+                    trim((string)($tenant->street ?? '') . ' ' . (string)($tenant->number ?? '')),
+                    trim((string)($tenant->neighborhood ?? '')),
+                    trim((string)($tenant->city ?? '') . '/' . (string)($tenant->state ?? '')),
+                ], static fn(string $part): bool => $part !== '' && $part !== '/');
+                $businessAddress = implode(', ', $businessAddress);
+                $businessWhatsApp = trim((string)($settings['whatsapp_number'] ?? $tenant->whatsapp ?? ''));
+                $orderLabel = OrderIdentity::label($o);
+
+                $message = WhatsAppService::completionMessage(
+                    (string)($settings['whatsapp_message'] ?? ''),
+                    [
+                        'NOME' => $clientName,
+                        'MARCA' => $vehicleBrand,
+                        'MODELO' => $vehicleModel !== '' ? $vehicleModel : $vehicleDescription,
+                        'VEICULO' => $vehicleDescription,
+                        'PLACA' => $vehiclePlate,
+                        'SERVICO' => $completedServiceLabel,
+                        'VALOR' => $formattedValue,
+                        'DATA' => $completedAt->format('d/m/Y'),
+                        'HORA' => $completedAt->format('H:i'),
+                        'EMPRESA' => (string)($tenant->name ?? ''),
+                        'OS' => $orderLabel,
+                        'WHATSAPP_EMPRESA' => $businessWhatsApp,
+                        'ENDERECO' => $businessAddress,
+                    ]
+                );
                 $waUrl = WhatsAppService::buildReadyUrl($phone, $message);
                 $waButton = $waUrl !== ''
-                    ? '<a class="btn btn-whatsapp btn-lg" target="_blank" rel="noopener" href="' . $this->e($waUrl) . '">Abrir WhatsApp</a>'
-                    : '<button type="button" class="btn btn-secondary btn-lg" disabled>Cliente sem WhatsApp</button>';
+                    ? '<a class="btn btn-whatsapp btn-lg" target="_blank" rel="noopener noreferrer" href="' . $this->e($waUrl) . '">Abrir WhatsApp</a>'
+                    : '<button type="button" class="btn btn-secondary btn-lg" disabled>Cliente sem telefone válido</button>';
 
-                $completedServiceLabel = $s ? (string)$s->name : ($completedServiceName !== '' ? $completedServiceName : 'Serviço');
-                $completedServiceDetails = $s && !empty($s->description)
-                    ? (string)$s->description
-                    : $completedServiceDescription;
-                if ($completedServiceDetails !== '') {
-                    $completedServiceDetails .= ' · ';
-                }
-                $completedServiceDetails .= 'R$ ' . number_format((float)$o->total_amount, 2, ',', '.');
-                $completedModal = '<div id="completedModal" class="modal-backdrop show"><div class="modal-content completion-modal"><div class="modal-header"><div><div class="eyebrow">Atendimento concluído</div><div class="modal-title">Seu carro está pronto</div></div><button type="button" class="modal-close" onclick="closeCompletedModal()">&times;</button></div><div class="modal-body completion-body">
-                    <div class="completion-success"><div class="completion-check">✓</div><div><strong>O.S. concluída com sucesso</strong><span>Revise os dados antes de avisar o cliente.</span></div></div>
-                    <div class="completion-grid"><div><span>Cliente</span><strong>' . $this->e($c ? $c->name : (string)($o->client_name_snapshot ?? 'Não informado')) . '</strong><small>' . $this->e($phone ?: (string)($o->client_phone_snapshot ?? 'Sem telefone')) . '</small></div><div><span>Veículo</span><strong>' . $this->e($v ? trim((string)$v->brand . ' ' . (string)$v->model) : (string)($o->vehicle_desc_snapshot ?? 'Não informado')) . '</strong><small>' . $this->e($v ? (string)$v->plate : (string)($o->vehicle_plate_snapshot ?? '')) . '</small></div><div><span>Serviço</span><strong>' . $this->e($completedServiceLabel) . '</strong><small>' . $this->e($completedServiceDetails) . '</small></div><div><span>Lavador</span><strong>' . $this->e((string)($o->washer_name_snapshot ?: 'Não definido')) . '</strong><small>' . number_format((float)($o->washer_commission_percent ?? 0), 1, ',', '.') . '% · R$ ' . number_format((float)($o->washer_commission_amount ?? 0), 2, ',', '.') . '</small></div></div>
-                    <div class="whatsapp-preview"><div><span>Mensagem pronta para o WhatsApp</span><p>' . $this->e($message) . '</p></div></div>
+                $vehicleDisplay = trim($vehicleDescription . ($vehiclePlate !== '' ? ' · placa ' . $vehiclePlate : ''));
+                $completedServiceDetails = trim($completedServiceDetails . ($completedServiceDetails !== '' ? ' · ' : '') . $formattedValue);
+                $clientDisplayPhone = $phone !== '' ? $phone : 'Telefone não informado';
+                $vehicleExtra = $vehiclePlate !== '' ? $vehiclePlate : 'Placa não informada';
+                $washerName = trim((string)($o->washer_name_snapshot ?? '')) ?: 'Não definido';
+                $completedModal = '<div id="completedModal" class="modal-backdrop show"><div class="modal-content completion-modal"><div class="modal-header"><div><div class="eyebrow">Atendimento concluído</div><div class="modal-title">Seu carro está pronto</div></div><button type="button" class="modal-close" onclick="closeCompletedModal()" aria-label="Fechar">&times;</button></div><div class="modal-body completion-body">
+                    <div class="completion-success"><div class="completion-check">✓</div><div><strong>O.S. concluída com sucesso</strong><span>Confira os dados e a mensagem antes de abrir o WhatsApp.</span></div></div>
+                    <div class="completion-grid"><div><span>Cliente</span><strong>' . $this->e($clientName) . '</strong><small>' . $this->e($clientDisplayPhone) . '</small></div><div><span>Veículo</span><strong>' . $this->e($vehicleDisplay) . '</strong><small>' . $this->e($vehicleExtra) . '</small></div><div><span>Serviço</span><strong>' . $this->e($completedServiceLabel) . '</strong><small>' . $this->e($completedServiceDetails) . '</small></div><div><span>Lavador</span><strong>' . $this->e($washerName) . '</strong><small>' . number_format((float)($o->washer_commission_percent ?? 0), 1, ',', '.') . '% · R$ ' . number_format((float)($o->washer_commission_amount ?? 0), 2, ',', '.') . '</small></div></div>
+                    <div class="whatsapp-preview"><div><span>Mensagem configurada para o WhatsApp</span><p>' . $this->e($message) . '</p><small>O WhatsApp será aberto com o texto preenchido. Confirme o envio no próprio aplicativo.</small></div></div>
                 </div><div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeCompletedModal()">Fechar</button>' . $waButton . '</div></div></div><script>function closeCompletedModal(){var m=document.getElementById("completedModal");if(m)m.remove();history.replaceState({},document.title,"index.php?class=OrdersController");}</script>';
             }
         }
