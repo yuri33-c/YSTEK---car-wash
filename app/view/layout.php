@@ -8,6 +8,7 @@
 </head>
 <body class="<?= $isSuper ? 'theme-superadmin' : 'theme-tenant' ?>" data-theme="<?= $isSuper ? 'superadmin' : 'tenant' ?>" data-tenant-revision="<?= htmlspecialchars((string)($tenantRealtimeVersion ?? ''), ENT_QUOTES, 'UTF-8') ?>">
     <button type="button" class="sidebar-scrim" aria-label="Fechar navegação" tabindex="-1"></button>
+    <div class="navigation-progress" aria-hidden="true"></div>
     <aside class="sidebar" id="appSidebar">
         <div class="sidebar-header">
             <img src="public/img/logo.png" alt="YSTEK">
@@ -90,6 +91,32 @@
             <?= $pageContent ?>
         </main>
     </div>
+    <?php if (!$isSuper): ?>
+        <?php
+            $mobileFinanceAllowed = in_array((string)($_SESSION['role'] ?? ''), ['ADMIN_TENANT', 'MANAGER', 'CASHIER'], true);
+            $mobileLastClass = $mobileFinanceAllowed ? 'FinancialController' : 'ClientsController';
+            $mobileLastLabel = $mobileFinanceAllowed ? 'Caixa' : 'Clientes';
+            $mobileLastIcon = $mobileFinanceAllowed ? 'finance' : 'clients';
+            $mobileNavItems = [
+                ['class' => 'DashboardController', 'label' => 'Início', 'icon' => 'dashboard'],
+                ['class' => 'AgendaController', 'label' => 'Agenda', 'icon' => 'calendar'],
+                ['class' => 'OrdersController', 'label' => 'Ordens', 'icon' => 'orders'],
+                ['class' => $mobileLastClass, 'label' => $mobileLastLabel, 'icon' => $mobileLastIcon],
+            ];
+        ?>
+        <nav class="mobile-bottom-nav" aria-label="Navegação rápida">
+            <?php foreach ($mobileNavItems as $mobileItem): ?>
+                <a class="mobile-bottom-item <?= $classParam === $mobileItem['class'] ? 'active' : '' ?>" href="index.php?class=<?= rawurlencode($mobileItem['class']) ?>" <?= $classParam === $mobileItem['class'] ? 'aria-current="page"' : '' ?>>
+                    <span class="mobile-bottom-icon"><?= ystekIcon($mobileItem['icon']) ?></span>
+                    <span><?= htmlspecialchars($mobileItem['label'], ENT_QUOTES, 'UTF-8') ?></span>
+                </a>
+            <?php endforeach; ?>
+            <button class="mobile-bottom-item mobile-bottom-more" type="button" data-mobile-nav-more aria-controls="appSidebar" aria-expanded="false">
+                <span class="mobile-bottom-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></span>
+                <span>Mais</span>
+            </button>
+        </nav>
+    <?php endif; ?>
     <script src="public/js/app-shell.js?v=<?= filemtime(__DIR__ . '/../../public/js/app-shell.js') ?>" defer></script>
 </body>
 </html>

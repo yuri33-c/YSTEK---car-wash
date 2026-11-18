@@ -98,30 +98,129 @@ class AgendaController extends TPage
         $status = OrderStatus::normalize($status);
         if ($status !== '' && !in_array($status, OrderStatus::all(), true)) $status = '';
 
-        TTransaction::open();
-        $conditions = 'tenant_id = :tenant AND entry_time >= :start AND entry_time < :end';
-        $params = [
-            ':tenant' => $_SESSION['tenant_id'],
-            ':start' => $date . ' 00:00:00',
-            ':end' => (new \DateTimeImmutable($date))->modify('+1 day')->format('Y-m-d 00:00:00'),
-        ];
-        if ($status !== '') {
-            $storedStatuses = OrderStatus::storedValues($status);
-            $statusParams = [];
-            foreach ($storedStatuses as $index => $storedStatus) {
-                $key = ':status_' . $index;
-                $statusParams[] = $key;
-                $params[$key] = $storedStatus;
-            }
-            $conditions .= ' AND status IN (' . implode(',', $statusParams) . ')';
-        }
-        $orders = ServiceOrder::getObjects($conditions, $params);
-        $clients = Client::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-        $vehicles = Vehicle::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-        TTransaction::close();
-
+        $tenantId = (string)$_SESSION['tenant_id'];
         $clientMap = [];
         $clientContactMap = [];
+        $vehicleMap = [];
+        $vehicleDataMap = [];
+        $serviceNameMap = [];
+        $serviceDescriptionMap = [];
+        $serviceItemsByOrder = [];
+
+        // A agenda é diária: só busca os cadastros e itens ligados às O.S. do dia.
+        // Antes, cada abertura carregava todos os clientes, veículos e itens históricos.
+        TTransaction::open();
+        try {
+            $pdo = TTransaction::get();
+            $conditions = 'tenant_id = :tenant AND entry_time >= :start AND entry_time < :end';
+            $params = [
+                ':tenant' => $tenantId,
+                ':start' => $date . ' 00:00:00',
+                ':end' => (new \DateTimeImmutable($date))->modify('+1 day')->format('Y-m-d 00:00:00'),
+            ];
+            if ($status !== '') {
+                $storedStatuses = OrderStatus::storedValues($status);
+                $statusParams = [];
+                foreach ($storedStatuses as $index => $storedStatus) {
+                    $key = ':status_' . $index;
+                    $statusParams[] = $key;
+                    $params[$key] = $storedStatus;
+                }
+                $conditions .= ' AND status IN (' . implode(',', $statusParams) . ')';
+            }
+            $orders = ServiceOrder::getObjects($conditions, $params);
+
+            $clientIds = array_values(array_unique(array_filter(array_map(
+                static fn($order) => (string)$order->client_id,
+                $orders
+            ))));
+            $vehicleIds = array_values(array_unique(array_filter(array_map(
+                static fn($order) => (string)$order->vehicle_id,
+                $orders
+            ))));
+            $orderIds = array_values(array_unique(array_filter(array_map(
+                static fn($order) => (string)$order->id,
+                $orders
+            ))));
+
+            $makeInParams = static function (string $prefix, array $ids, array &$binds): array {
+                $placeholders = [];
+                foreach ($ids as $index => $id) {
+                    $key = ':' . $prefix . $index;
+                    $placeholders[] = $key;
+                    $binds[$key] = $id;
+                }
+                return $placeholders;
+            };
+
+            $clients = [];
+            if ($clientIds) {
+                $clientBinds = [':tenant' => $tenantId];
+                $clientPlaceholders = $makeInParams('client_', $clientIds, $clientBinds);
+                $stmt = $pdo->prepare('SELECT id, name, phone, document FROM public.clients WHERE tenant_id = :tenant AND id IN (' . implode(',', $clientPlaceholders) . ')');
+                $stmt->execute($clientBinds);
+                foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                    $client = new Client();
+                    $client->fromArray($row);
+                    $clients[] = $client;
+                }
+            }
+
+            $vehicles = [];
+            if ($vehicleIds) {
+                $vehicleBinds = [':tenant' => $tenantId];
+                $vehiclePlaceholders = $makeInParams('vehicle_', $vehicleIds, $vehicleBinds);
+                $stmt = $pdo->prepare('SELECT id, plate, brand, model, color, category FROM public.vehicles WHERE tenant_id = :tenant AND id IN (' . implode(',', $vehiclePlaceholders) . ')');
+                $stmt->execute($vehicleBinds);
+                foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                    $vehicle = new Vehicle();
+                    $vehicle->fromArray($row);
+                    $vehicles[] = $vehicle;
+                }
+            }
+
+            if ($orderIds) {
+                $itemBinds = [':tenant' => $tenantId];
+                $orderPlaceholders = $makeInParams('order_', $orderIds, $itemBinds);
+                $snapshotColumn = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_order_items', 'service_name_snapshot')
+                    ? ', soi.service_name_snapshot'
+                    : '';
+                $descriptionColumn = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_order_items', 'service_description_snapshot')
+                    ? ', soi.service_description_snapshot'
+                    : '';
+                $stmt = $pdo->prepare('SELECT soi.service_order_id, soi.service_id' . $snapshotColumn . $descriptionColumn . '
+                    FROM public.service_order_items soi
+                    INNER JOIN public.service_orders so ON so.id = soi.service_order_id
+                    WHERE so.tenant_id = :tenant AND so.id IN (' . implode(',', $orderPlaceholders) . ')
+                    ORDER BY soi.id');
+                $stmt->execute($itemBinds);
+                $itemRows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+                $serviceIds = [];
+                foreach ($itemRows as $itemRow) {
+                    $orderId = (string)$itemRow['service_order_id'];
+                    $serviceItemsByOrder[$orderId] = [
+                        'service_id' => (string)($itemRow['service_id'] ?? ''),
+                        'service_name_snapshot' => (string)($itemRow['service_name_snapshot'] ?? ''),
+                        'service_description_snapshot' => (string)($itemRow['service_description_snapshot'] ?? ''),
+                    ];
+                    if (!empty($itemRow['service_id'])) $serviceIds[] = (string)$itemRow['service_id'];
+                }
+                $serviceIds = array_values(array_unique($serviceIds));
+                if ($serviceIds) {
+                    $serviceBinds = [':tenant' => $tenantId];
+                    $servicePlaceholders = $makeInParams('service_', $serviceIds, $serviceBinds);
+                    $serviceStmt = $pdo->prepare('SELECT id, name, description FROM public.services WHERE tenant_id = :tenant AND id IN (' . implode(',', $servicePlaceholders) . ')');
+                    $serviceStmt->execute($serviceBinds);
+                    foreach ($serviceStmt->fetchAll(\PDO::FETCH_ASSOC) as $service) {
+                        $serviceNameMap[(string)$service['id']] = (string)$service['name'];
+                        $serviceDescriptionMap[(string)$service['id']] = (string)($service['description'] ?? '');
+                    }
+                }
+            }
+        } finally {
+            TTransaction::close();
+        }
+
         foreach ($clients as $c) {
             $clientMap[(string)$c->id] = (string)$c->name;
             $clientContactMap[(string)$c->id] = [
@@ -129,8 +228,6 @@ class AgendaController extends TPage
                 'document' => (string)($c->document ?? ''),
             ];
         }
-        $vehicleMap = [];
-        $vehicleDataMap = [];
         foreach ($vehicles as $v) {
             $vehicleMap[(string)$v->id] = trim((string)$v->plate . ' · ' . (string)$v->brand . ' ' . (string)$v->model);
             $vehicleDataMap[(string)$v->id] = [
@@ -140,36 +237,6 @@ class AgendaController extends TPage
                 'color' => (string)($v->color ?? ''),
                 'category' => (string)($v->category ?? ''),
             ];
-        }
-        $serviceNameMap = [];
-        $serviceDescriptionMap = [];
-        $serviceItemsByOrder = [];
-        TTransaction::open();
-        try {
-            $pdo = TTransaction::get();
-            $snapshotColumn = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_order_items', 'service_name_snapshot')
-                ? ', soi.service_name_snapshot'
-                : '';
-            $descriptionColumn = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_order_items', 'service_description_snapshot')
-                ? ', soi.service_description_snapshot'
-                : '';
-            $stmt = $pdo->prepare('SELECT soi.service_order_id, soi.service_id' . $snapshotColumn . $descriptionColumn . ' FROM service_order_items soi INNER JOIN service_orders so ON so.id = soi.service_order_id WHERE so.tenant_id = :tenant');
-            $stmt->execute([':tenant' => $_SESSION['tenant_id']]);
-            $itemRows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-            foreach ($itemRows as $itemRow) {
-                $serviceItemsByOrder[(string)$itemRow['service_order_id']] = [
-                    'service_id' => (string)$itemRow['service_id'],
-                    'service_name_snapshot' => (string)($itemRow['service_name_snapshot'] ?? ''),
-                    'service_description_snapshot' => (string)($itemRow['service_description_snapshot'] ?? ''),
-                ];
-            }
-            $services = Service::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-            foreach ($services as $svc) {
-                $serviceNameMap[(string)$svc->id] = (string)$svc->name;
-                $serviceDescriptionMap[(string)$svc->id] = (string)($svc->description ?? '');
-            }
-        } finally {
-            TTransaction::close();
         }
 
         // A pesquisa é aplicada apenas aos dados do dia selecionado, sem alterar o histórico salvo.

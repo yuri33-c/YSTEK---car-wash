@@ -126,16 +126,55 @@ class VehiclesController extends TPage
     public function show()
     {
         $csrf = \App\Core\Security::csrfInput();
+        $tenantId = (string)$_SESSION['tenant_id'];
+        $perPage = 25;
+        $currentPage = max(1, (int)($_GET['page'] ?? 1));
         TTransaction::open();
-        $vehicles = Vehicle::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-        $allClients = Client::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-        $clients = Client::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-        
-        $clientMap = [];
-        foreach ($allClients as $cl) {
-            $clientMap[$cl->id] = $cl->name;
+        try {
+            $pdo = TTransaction::get();
+            $countStmt = $pdo->prepare('SELECT COUNT(*) FROM public.vehicles WHERE tenant_id = :tenant_id');
+            $countStmt->execute([':tenant_id' => $tenantId]);
+            $totalVehicles = (int)$countStmt->fetchColumn();
+            $totalPages = max(1, (int)ceil($totalVehicles / $perPage));
+            $currentPage = min($currentPage, $totalPages);
+            $vehicleStmt = $pdo->prepare('SELECT * FROM public.vehicles WHERE tenant_id = :tenant_id ORDER BY created_at DESC, id DESC LIMIT :limit_rows OFFSET :offset_rows');
+            $vehicleStmt->bindValue(':tenant_id', $tenantId);
+            $vehicleStmt->bindValue(':limit_rows', $perPage, \PDO::PARAM_INT);
+            $vehicleStmt->bindValue(':offset_rows', ($currentPage - 1) * $perPage, \PDO::PARAM_INT);
+            $vehicleStmt->execute();
+            $vehicles = [];
+            foreach ($vehicleStmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $vehicle = new Vehicle();
+                $vehicle->fromArray($row);
+                $vehicles[] = $vehicle;
+            }
+
+            // O seletor precisa dos nomes de todos os clientes, mas não de objetos completos.
+            $clientStmt = $pdo->prepare('SELECT id, name FROM public.clients WHERE tenant_id = :tenant_id ORDER BY name ASC');
+            $clientStmt->execute([':tenant_id' => $tenantId]);
+            $clientMap = [];
+            $clientOptions = '';
+            foreach ($clientStmt->fetchAll(\PDO::FETCH_ASSOC) as $clientRow) {
+                $clientMap[(string)$clientRow['id']] = (string)$clientRow['name'];
+                $clientOptions .= "<option value='" . htmlspecialchars((string)$clientRow['id'], ENT_QUOTES, 'UTF-8') . "'>" . htmlspecialchars((string)$clientRow['name'], ENT_QUOTES, 'UTF-8') . "</option>";
+            }
+        } finally {
+            TTransaction::close();
         }
-        TTransaction::close();
+
+        $pagination = '';
+        if ($totalPages > 1) {
+            $pagination = '<nav class="pagination-bar" aria-label="Paginação de veículos">';
+            if ($currentPage > 1) $pagination .= '<a class="pagination-link" href="index.php?class=VehiclesController&page=' . ($currentPage - 1) . '">Anterior</a>';
+            $startPage = max(1, $currentPage - 2);
+            $endPage = min($totalPages, $currentPage + 2);
+            for ($pageNumber = $startPage; $pageNumber <= $endPage; $pageNumber++) {
+                $active = $pageNumber === $currentPage ? ' is-active' : '';
+                $pagination .= '<a class="pagination-link' . $active . '" href="index.php?class=VehiclesController&page=' . $pageNumber . '">' . $pageNumber . '</a>';
+            }
+            if ($currentPage < $totalPages) $pagination .= '<a class="pagination-link" href="index.php?class=VehiclesController&page=' . ($currentPage + 1) . '">Próxima</a>';
+            $pagination .= '<span class="pagination-caption">' . $totalVehicles . ' veículos · página ' . $currentPage . ' de ' . $totalPages . '</span></nav>';
+        }
 
         $rows = '';
         foreach ($vehicles as $veh) {
@@ -153,16 +192,11 @@ class VehiclesController extends TPage
             </tr>";
         }
 
-        $clientOptions = '';
-        foreach ($clients as $cl) {
-            $clientOptions .= "<option value='{$cl->id}'>" . htmlspecialchars($cl->name) . "</option>";
-        }
-
         echo "
         <div class='page-heading'><div><div class='eyebrow'>Cadastros</div><h1>Veículos</h1><p>Controle da frota vinculada aos clientes.</p></div><div class='heading-actions'><button onclick='openVehicleModal()' class='btn btn-primary btn-lg'>+ Cadastrar Veículo</button></div></div>
         <div class='panel'>
             <div class='panel-header'>
-                <div><div class='panel-title'>Frota & Veículos Cadastrados</div><div class='panel-subtitle'>Veículos disponíveis para abertura de O.S.</div></div>
+                <div><div class='panel-title'>Frota & Veículos Cadastrados</div><div class='panel-subtitle'>" . $totalVehicles . " veículo(s) cadastrado(s) · 25 por página</div></div>
             </div>
             <div class='panel-body'>
                 <div class='table-responsive'>
@@ -182,6 +216,7 @@ class VehiclesController extends TPage
                         </tbody>
                     </table>
                 </div>
+                {$pagination}
             </div>
         </div>
 

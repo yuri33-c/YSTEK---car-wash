@@ -28,15 +28,10 @@ class DashboardController extends TPage
         $tenantId = $_SESSION['tenant_id'];
         $plan = PlanCatalog::normalize($_SESSION['tenant_plan'] ?? PlanCatalog::PREMIUM);
 
-        TTransaction::open();
-        $orders = ServiceOrder::getObjects('tenant_id = :t', [':t' => $tenantId]);
-        $clientsCount = count(Client::getObjects('tenant_id = :t', [':t' => $tenantId]));
-        $vehiclesCount = count(Vehicle::getObjects('tenant_id = :t', [':t' => $tenantId]));
-        $finRecords = FinancialRecord::getObjects('tenant_id = :t', [':t' => $tenantId]);
-        TTransaction::close();
-
         $today = date('Y-m-d');
-        $monthPrefix = date('Y-m');
+        $tomorrow = date('Y-m-d', strtotime('+1 day'));
+        $monthStart = date('Y-m-01');
+        $sevenDaysStart = date('Y-m-d', strtotime('-6 days'));
         $agendamentosHoje = 0;
         $aguardando = 0;
         $emServico = 0;
@@ -48,32 +43,119 @@ class DashboardController extends TPage
             $day = date('Y-m-d', strtotime("-$i days"));
             $daily[$day] = 0.0;
         }
+        $orders = [];
+        $clientsCount = 0;
+        $vehiclesCount = 0;
+        $monthlyGoal = 0.0;
 
-        foreach ($orders as $o) {
-            $entry = (string)$o->entry_time;
-            $entryDate = substr($entry, 0, 10);
-            $status = OrderStatus::normalize((string)$o->status);
-            if ($entryDate === $today) {
-                $agendamentosHoje++;
-                if (in_array($status, [OrderStatus::SCHEDULED, OrderStatus::WAITING], true)) $aguardando++;
-                if ($status === OrderStatus::IN_SERVICE) $emServico++;
-                if ($status === OrderStatus::FINISHED) {
-                    $finalizadosHoje++;
-                    $faturamentoHoje += (float)$o->total_amount;
+        // O painel não precisa carregar todo o histórico para calcular indicadores.
+        // O PostgreSQL agrega os valores e entrega somente as seis O.S. mais recentes.
+        TTransaction::open();
+        try {
+            $pdo = TTransaction::get();
+            $statsStmt = $pdo->prepare("
+                SELECT
+                    COUNT(*) FILTER (WHERE entry_time >= :today_start AND entry_time < :today_end) AS today_total,
+                    COUNT(*) FILTER (WHERE entry_time >= :today_start_wait AND entry_time < :today_end_wait AND status IN ('Agendado', 'Pendente', 'Aguardando')) AS waiting_total,
+                    COUNT(*) FILTER (WHERE entry_time >= :today_start_service AND entry_time < :today_end_service AND status IN ('Em serviço', 'Em Andamento')) AS service_total,
+                    COUNT(*) FILTER (WHERE entry_time >= :today_start_finished AND entry_time < :today_end_finished AND status IN ('Finalizado', 'Concluído')) AS finished_today,
+                    COALESCE(SUM(total_amount) FILTER (WHERE entry_time >= :today_start_revenue AND entry_time < :today_end_revenue AND status IN ('Finalizado', 'Concluído')), 0) AS revenue_today,
+                    COALESCE(SUM(total_amount) FILTER (WHERE entry_time >= :month_start AND status IN ('Finalizado', 'Concluído')), 0) AS revenue_month
+                FROM public.service_orders
+                WHERE tenant_id = :tenant_id
+                  AND entry_time >= :month_floor
+            ");
+            $statsStmt->execute([
+                ':tenant_id' => $tenantId,
+                ':today_start' => $today . ' 00:00:00', ':today_end' => $tomorrow . ' 00:00:00',
+                ':today_start_wait' => $today . ' 00:00:00', ':today_end_wait' => $tomorrow . ' 00:00:00',
+                ':today_start_service' => $today . ' 00:00:00', ':today_end_service' => $tomorrow . ' 00:00:00',
+                ':today_start_finished' => $today . ' 00:00:00', ':today_end_finished' => $tomorrow . ' 00:00:00',
+                ':today_start_revenue' => $today . ' 00:00:00', ':today_end_revenue' => $tomorrow . ' 00:00:00',
+                ':month_start' => $monthStart . ' 00:00:00', ':month_floor' => $monthStart . ' 00:00:00',
+            ]);
+            $stats = $statsStmt->fetch(\PDO::FETCH_ASSOC) ?: [];
+            $agendamentosHoje = (int)($stats['today_total'] ?? 0);
+            $aguardando = (int)($stats['waiting_total'] ?? 0);
+            $emServico = (int)($stats['service_total'] ?? 0);
+            $finalizadosHoje = (int)($stats['finished_today'] ?? 0);
+            $faturamentoHoje = (float)($stats['revenue_today'] ?? 0);
+            $faturamentoMes = (float)($stats['revenue_month'] ?? 0);
+
+            $dailyStmt = $pdo->prepare("
+                SELECT entry_time::date AS day, COALESCE(SUM(total_amount), 0) AS revenue
+                FROM public.service_orders
+                WHERE tenant_id = :tenant_id
+                  AND entry_time >= :from_date
+                  AND entry_time < :to_date
+                  AND status IN ('Finalizado', 'Concluído')
+                GROUP BY entry_time::date
+            ");
+            $dailyStmt->execute([
+                ':tenant_id' => $tenantId,
+                ':from_date' => $sevenDaysStart . ' 00:00:00',
+                ':to_date' => $tomorrow . ' 00:00:00',
+            ]);
+            foreach ($dailyStmt->fetchAll(\PDO::FETCH_ASSOC) as $dailyRow) {
+                $dayKey = (string)$dailyRow['day'];
+                if (array_key_exists($dayKey, $daily)) {
+                    $daily[$dayKey] = (float)$dailyRow['revenue'];
                 }
             }
-            if ($status === OrderStatus::FINISHED && strpos($entry, $monthPrefix) === 0) {
-                $faturamentoMes += (float)$o->total_amount;
-                if (isset($daily[$entryDate])) $daily[$entryDate] += (float)$o->total_amount;
-            }
-        }
 
-        if ($faturamentoMes <= 0.0) {
-            foreach ($finRecords as $r) {
-                if ($r->type === 'Receita' && (string)($r->status ?? '') !== 'Cancelado' && strpos((string)$r->created_at, $monthPrefix) === 0) {
-                    $faturamentoMes += (float)$r->amount;
-                }
+            $countStmt = $pdo->prepare("
+                SELECT
+                    (SELECT COUNT(*) FROM public.clients WHERE tenant_id = :clients_tenant) AS clients_count,
+                    (SELECT COUNT(*) FROM public.vehicles WHERE tenant_id = :vehicles_tenant) AS vehicles_count
+            ");
+            $countStmt->execute([':clients_tenant' => $tenantId, ':vehicles_tenant' => $tenantId]);
+            $counts = $countStmt->fetch(\PDO::FETCH_ASSOC) ?: [];
+            $clientsCount = (int)($counts['clients_count'] ?? 0);
+            $vehiclesCount = (int)($counts['vehicles_count'] ?? 0);
+
+            // Registros financeiros são consultados apenas quando não há receita de O.S.
+            if ($faturamentoMes <= 0.0) {
+                $fallbackStmt = $pdo->prepare("
+                    SELECT COALESCE(SUM(amount), 0)
+                    FROM public.financial_records
+                    WHERE tenant_id = :tenant_id
+                      AND type = 'Receita'
+                      AND COALESCE(status, '') <> 'Cancelado'
+                      AND created_at >= :month_start
+            ");
+                $fallbackStmt->execute([
+                    ':tenant_id' => $tenantId,
+                    ':month_start' => $monthStart . ' 00:00:00',
+                ]);
+                $faturamentoMes = (float)$fallbackStmt->fetchColumn();
             }
+
+            $todayOrdersStmt = $pdo->prepare("
+                SELECT * FROM public.service_orders
+                WHERE tenant_id = :tenant_id
+                  AND entry_time >= :today_start
+                  AND entry_time < :today_end
+                ORDER BY entry_time DESC, id DESC
+                LIMIT 6
+            ");
+            $todayOrdersStmt->execute([
+                ':tenant_id' => $tenantId,
+                ':today_start' => $today . ' 00:00:00',
+                ':today_end' => $tomorrow . ' 00:00:00',
+            ]);
+            foreach ($todayOrdersStmt->fetchAll(\PDO::FETCH_ASSOC) as $orderRow) {
+                $order = new ServiceOrder();
+                $order->fromArray($orderRow);
+                $orders[] = $order;
+            }
+
+            if (PlanCatalog::allows($plan, 'revenue_goals')) {
+                $goalStmt = $pdo->prepare('SELECT monthly_revenue_goal FROM public.tenant_settings WHERE tenant_id = :tenant_id LIMIT 1');
+                $goalStmt->execute([':tenant_id' => $tenantId]);
+                $monthlyGoal = (float)($goalStmt->fetchColumn() ?: 0);
+            }
+        } finally {
+            TTransaction::close();
         }
 
         $maxDay = max(1.0, max($daily));
@@ -102,22 +184,10 @@ class DashboardController extends TPage
         }
 
         $goalBlock = '';
-        if (PlanCatalog::allows($plan, 'revenue_goals')) {
-            try {
-                TTransaction::open();
-                $goalStmt = TTransaction::get()->prepare('SELECT monthly_revenue_goal FROM public.tenant_settings WHERE tenant_id = :tenant_id LIMIT 1');
-                $goalStmt->execute([':tenant_id' => (string)$tenantId]);
-                $goal = (float)($goalStmt->fetchColumn() ?: 0);
-                TTransaction::close();
-                if ($goal > 0) {
-                    $progress = min(100, round(($faturamentoMes / $goal) * 100, 1));
-                    $remaining = max(0, $goal - $faturamentoMes);
-                    $goalBlock = '<div class="panel goal-panel"><div class="panel-header"><div><div class="panel-title">Meta de faturamento</div><div class="panel-subtitle">Acompanhamento mensal Premium</div></div><span class="manager-badge">PREMIUM SaaS</span></div><div class="goal-content"><div class="goal-copy"><strong>R$ ' . number_format($faturamentoMes, 2, ',', '.') . ' <span>/ R$ ' . number_format($goal, 2, ',', '.') . '</span></strong><small>' . number_format($progress, 1, ',', '.') . '% da meta alcançada</small></div><div class="goal-track"><span style="width:' . $progress . '%"></span></div><div class="goal-foot"><span>Falta R$ ' . number_format($remaining, 2, ',', '.') . ' para alcançar a meta.</span><a href="index.php?class=SettingsController">Ajustar meta</a></div></div></div>';
-                }
-            } catch (\Throwable $e) {
-                try { TTransaction::close(); } catch (\Throwable $ignore) {}
-                error_log('Revenue goal warning: ' . $e->getMessage());
-            }
+        if ($monthlyGoal > 0) {
+            $progress = min(100, round(($faturamentoMes / $monthlyGoal) * 100, 1));
+            $remaining = max(0, $monthlyGoal - $faturamentoMes);
+            $goalBlock = '<div class="panel goal-panel"><div class="panel-header"><div><div class="panel-title">Meta de faturamento</div><div class="panel-subtitle">Acompanhamento mensal Premium</div></div><span class="manager-badge">PREMIUM SaaS</span></div><div class="goal-content"><div class="goal-copy"><strong>R$ ' . number_format($faturamentoMes, 2, ',', '.') . ' <span>/ R$ ' . number_format($monthlyGoal, 2, ',', '.') . '</span></strong><small>' . number_format($progress, 1, ',', '.') . '% da meta alcançada</small></div><div class="goal-track"><span style="width:' . $progress . '%"></span></div><div class="goal-foot"><span>Falta R$ ' . number_format($remaining, 2, ',', '.') . ' para alcançar a meta.</span><a href="index.php?class=SettingsController">Ajustar meta</a></div></div></div>';
         }
 
         $ordersRows = '';

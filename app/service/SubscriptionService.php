@@ -17,7 +17,7 @@ final class SubscriptionService
 
 
     /** Devolve a assinatura atual; se ela não existir, usa os campos do tenant. */
-    public static function current(PDO $pdo, string $tenantId): array
+    public static function current(PDO $pdo, string $tenantId, ?array $tenantFallback = null): array
     {
         $stmt = $pdo->prepare('SELECT * FROM subscriptions WHERE tenant_id = :tenant_id LIMIT 1');
         $stmt->execute([':tenant_id' => $tenantId]);
@@ -28,9 +28,14 @@ final class SubscriptionService
             return $row;
         }
 
-        $stmt = $pdo->prepare('SELECT plan, status, start_date, due_date FROM tenants WHERE id = :tenant_id LIMIT 1');
-        $stmt->execute([':tenant_id' => $tenantId]);
-        $tenant = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        // Quando o chamador já leu os dados do tenant, usa esse snapshot para
+        // evitar uma segunda ida ao PostgreSQL apenas para o fallback legado.
+        $tenant = $tenantFallback;
+        if ($tenant === null) {
+            $stmt = $pdo->prepare('SELECT plan, status, start_date, due_date FROM tenants WHERE id = :tenant_id LIMIT 1');
+            $stmt->execute([':tenant_id' => $tenantId]);
+            $tenant = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        }
 
         return [
             'tenant_id' => $tenantId,
@@ -39,7 +44,7 @@ final class SubscriptionService
             'status' => strtolower((string)($tenant['status'] ?? 'suspenso')) === 'ativo' ? 'active' : 'suspended',
             'start_date' => $tenant['start_date'] ?? date('Y-m-d'),
             'due_date' => $tenant['due_date'] ?? date('Y-m-d'),
-            'grace_until' => null,
+            'grace_until' => $tenant['grace_until'] ?? null,
         ];
     }
 

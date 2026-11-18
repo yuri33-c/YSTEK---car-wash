@@ -134,18 +134,56 @@ class FinancialController extends TPage
     public function show()
     {
         $csrf = \App\Core\Security::csrfInput();
+        $tenantId = (string)$_SESSION['tenant_id'];
+        $perPage = 25;
+        $currentPage = max(1, (int)($_GET['page'] ?? 1));
         TTransaction::open();
-        $records = FinancialRecord::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-        TTransaction::close();
+        try {
+            $pdo = TTransaction::get();
+            $totalsStmt = $pdo->prepare("SELECT
+                COALESCE(SUM(amount) FILTER (WHERE type = 'Receita' AND COALESCE(status, 'Pago') <> 'Cancelado'), 0) AS total_revenue,
+                COALESCE(SUM(amount) FILTER (WHERE type = 'Despesa' AND COALESCE(status, 'Pago') <> 'Cancelado'), 0) AS total_expenses,
+                COUNT(*) AS total_records
+                FROM public.financial_records WHERE tenant_id = :tenant_id");
+            $totalsStmt->execute([':tenant_id' => $tenantId]);
+            $totals = $totalsStmt->fetch(\PDO::FETCH_ASSOC) ?: [];
+            $totalReceitas = (float)($totals['total_revenue'] ?? 0);
+            $totalDespesas = (float)($totals['total_expenses'] ?? 0);
+            $totalRecords = (int)($totals['total_records'] ?? 0);
+            $totalPages = max(1, (int)ceil($totalRecords / $perPage));
+            $currentPage = min($currentPage, $totalPages);
+            $recordsStmt = $pdo->prepare('SELECT * FROM public.financial_records WHERE tenant_id = :tenant_id ORDER BY created_at DESC, id DESC LIMIT :limit_rows OFFSET :offset_rows');
+            $recordsStmt->bindValue(':tenant_id', $tenantId);
+            $recordsStmt->bindValue(':limit_rows', $perPage, \PDO::PARAM_INT);
+            $recordsStmt->bindValue(':offset_rows', ($currentPage - 1) * $perPage, \PDO::PARAM_INT);
+            $recordsStmt->execute();
+            $records = [];
+            foreach ($recordsStmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $record = new FinancialRecord();
+                $record->fromArray($row);
+                $records[] = $record;
+            }
+        } finally {
+            TTransaction::close();
+        }
 
-        $totalReceitas = 0;
-        $totalDespesas = 0;
+        $pagination = '';
+        if ($totalPages > 1) {
+            $pagination = '<nav class="pagination-bar" aria-label="Paginação financeira">';
+            if ($currentPage > 1) $pagination .= '<a class="pagination-link" href="index.php?class=FinancialController&page=' . ($currentPage - 1) . '">Anterior</a>';
+            $startPage = max(1, $currentPage - 2);
+            $endPage = min($totalPages, $currentPage + 2);
+            for ($pageNumber = $startPage; $pageNumber <= $endPage; $pageNumber++) {
+                $active = $pageNumber === $currentPage ? ' is-active' : '';
+                $pagination .= '<a class="pagination-link' . $active . '" href="index.php?class=FinancialController&page=' . $pageNumber . '">' . $pageNumber . '</a>';
+            }
+            if ($currentPage < $totalPages) $pagination .= '<a class="pagination-link" href="index.php?class=FinancialController&page=' . ($currentPage + 1) . '">Próxima</a>';
+            $pagination .= '<span class="pagination-caption">' . $totalRecords . ' lançamentos · página ' . $currentPage . ' de ' . $totalPages . '</span></nav>';
+        }
 
         $rows = '';
         foreach ($records as $r) {
             $financialStatus = trim((string)($r->status ?? 'Pago'));
-            if ($financialStatus !== 'Cancelado' && $r->type === 'Receita') $totalReceitas += $r->amount;
-            if ($financialStatus !== 'Cancelado' && $r->type === 'Despesa') $totalDespesas += $r->amount;
 
             $valFmt = 'R$ ' . number_format($r->amount, 2, ',', '.');
             $typeClass = $r->type === 'Receita' ? 'badge-concluido' : 'badge-cancelado';
@@ -192,21 +230,25 @@ class FinancialController extends TPage
         $premiumPanel = '';
         if (\App\Service\PlanGuard::allows('finance_advanced')) {
             TTransaction::open();
-            $orders = \App\Model\ServiceOrder::getObjects(
-                'tenant_id = :tenant AND status IN (:finished, :legacy_finished)',
-                [':tenant' => $_SESSION['tenant_id'], ':finished' => \App\Service\OrderStatus::FINISHED, ':legacy_finished' => 'Concluído']
-            );
-            TTransaction::close();
-
-            $byMethod = [];
-            foreach ($orders as $order) {
-                $method = trim((string)($order->payment_method ?? 'Não informado')) ?: 'Não informado';
-                $byMethod[$method] = ($byMethod[$method] ?? 0) + (float)$order->total_amount;
+            try {
+                $methodStmt = TTransaction::get()->prepare("SELECT COALESCE(NULLIF(BTRIM(payment_method), ''), 'Não informado') AS method,
+                    COALESCE(SUM(total_amount), 0) AS revenue
+                    FROM public.service_orders
+                    WHERE tenant_id = :tenant_id AND status IN (:finished, :legacy_finished)
+                    GROUP BY COALESCE(NULLIF(BTRIM(payment_method), ''), 'Não informado')
+                    ORDER BY revenue DESC LIMIT 6");
+                $methodStmt->execute([
+                    ':tenant_id' => $tenantId,
+                    ':finished' => \App\Service\OrderStatus::FINISHED,
+                    ':legacy_finished' => 'Concluído',
+                ]);
+                $methodRowsData = $methodStmt->fetchAll(\PDO::FETCH_ASSOC);
+            } finally {
+                TTransaction::close();
             }
-            arsort($byMethod);
             $methodRows = '';
-            foreach (array_slice($byMethod, 0, 6, true) as $method => $value) {
-                $methodRows .= '<tr><td>' . htmlspecialchars($method, ENT_QUOTES, 'UTF-8') . '</td><td><strong>R$ ' . number_format($value, 2, ',', '.') . '</strong></td></tr>';
+            foreach ($methodRowsData as $methodRow) {
+                $methodRows .= '<tr><td>' . htmlspecialchars((string)$methodRow['method'], ENT_QUOTES, 'UTF-8') . '</td><td><strong>R$ ' . number_format((float)$methodRow['revenue'], 2, ',', '.') . '</strong></td></tr>';
             }
             if ($methodRows === '') {
                 $methodRows = '<tr><td colspan="2" class="empty-state"><strong>Nenhum pagamento concluído</strong><span>Os dados aparecerão após a finalização dos atendimentos.</span></td></tr>';
@@ -258,6 +300,7 @@ class FinancialController extends TPage
                         </tbody>
                     </table>
                 </div>
+                {$pagination}
             </div>
         </div>
 

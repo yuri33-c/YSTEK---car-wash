@@ -86,9 +86,45 @@ class ClientsController extends TPage
     public function show()
     {
         $csrf = \App\Core\Security::csrfInput();
+        $tenantId = (string)$_SESSION['tenant_id'];
+        $perPage = 25;
+        $currentPage = max(1, (int)($_GET['page'] ?? 1));
         TTransaction::open();
-        $clients = Client::getObjects('tenant_id = :t', [':t' => $_SESSION['tenant_id']]);
-        TTransaction::close();
+        try {
+            $pdo = TTransaction::get();
+            $countStmt = $pdo->prepare('SELECT COUNT(*) FROM public.clients WHERE tenant_id = :tenant_id');
+            $countStmt->execute([':tenant_id' => $tenantId]);
+            $totalClients = (int)$countStmt->fetchColumn();
+            $totalPages = max(1, (int)ceil($totalClients / $perPage));
+            $currentPage = min($currentPage, $totalPages);
+            $stmt = $pdo->prepare('SELECT * FROM public.clients WHERE tenant_id = :tenant_id ORDER BY created_at DESC, id DESC LIMIT :limit_rows OFFSET :offset_rows');
+            $stmt->bindValue(':tenant_id', $tenantId);
+            $stmt->bindValue(':limit_rows', $perPage, \PDO::PARAM_INT);
+            $stmt->bindValue(':offset_rows', ($currentPage - 1) * $perPage, \PDO::PARAM_INT);
+            $stmt->execute();
+            $clients = [];
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $client = new Client();
+                $client->fromArray($row);
+                $clients[] = $client;
+            }
+        } finally {
+            TTransaction::close();
+        }
+
+        $pagination = '';
+        if ($totalPages > 1) {
+            $pagination = '<nav class="pagination-bar" aria-label="Paginação de clientes">';
+            if ($currentPage > 1) $pagination .= '<a class="pagination-link" href="index.php?class=ClientsController&page=' . ($currentPage - 1) . '">Anterior</a>';
+            $startPage = max(1, $currentPage - 2);
+            $endPage = min($totalPages, $currentPage + 2);
+            for ($pageNumber = $startPage; $pageNumber <= $endPage; $pageNumber++) {
+                $active = $pageNumber === $currentPage ? ' is-active' : '';
+                $pagination .= '<a class="pagination-link' . $active . '" href="index.php?class=ClientsController&page=' . $pageNumber . '">' . $pageNumber . '</a>';
+            }
+            if ($currentPage < $totalPages) $pagination .= '<a class="pagination-link" href="index.php?class=ClientsController&page=' . ($currentPage + 1) . '">Próxima</a>';
+            $pagination .= '<span class="pagination-caption">' . $totalClients . ' clientes · página ' . $currentPage . ' de ' . $totalPages . '</span></nav>';
+        }
 
         $rows = '';
         foreach ($clients as $c) {
@@ -109,7 +145,7 @@ class ClientsController extends TPage
         <div class='page-heading'><div><div class='eyebrow'>Cadastros</div><h1>Clientes</h1><p>Cadastro e histórico de contatos do lava-jato.</p></div><div class='heading-actions'><button onclick='openClientModal()' class='btn btn-primary btn-lg'>+ Novo Cliente</button></div></div>
         <div class='panel'>
             <div class='panel-header'>
-                <div><div class='panel-title'>Gestão de Clientes</div><div class='panel-subtitle'>" . count($clients) . " cliente(s) cadastrado(s)</div></div>
+                <div><div class='panel-title'>Gestão de Clientes</div><div class='panel-subtitle'>" . $totalClients . " cliente(s) cadastrado(s) · 25 por página</div></div>
             </div>
             <div class='panel-body'>
                 <div class='table-responsive'>
@@ -129,6 +165,7 @@ class ClientsController extends TPage
                         </tbody>
                     </table>
                 </div>
+                {$pagination}
             </div>
         </div>
 

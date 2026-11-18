@@ -476,79 +476,151 @@ class OrdersController extends TPage
         $tenantId = (string)$_SESSION['tenant_id'];
         $csrf = \App\Core\Security::csrfInput();
 
-        TTransaction::open();
-        $orders = ServiceOrder::getObjects('tenant_id = :t', [':t' => $tenantId]);
-        // Mais recentes primeiro (a ordem padrão da consulta é pela chave, sem sentido para o usuário).
-        usort($orders, static fn($a, $b) => strcmp((string)$b->entry_time, (string)$a->entry_time));
-        $clients = Client::getObjects('tenant_id = :t', [':t' => $tenantId]);
-        $vehicles = Vehicle::getObjects('tenant_id = :t', [':t' => $tenantId]);
-        $services = Service::getObjects("tenant_id = :t AND status = 'ativo'", [':t' => $tenantId]);
-        $washers = User::getObjects("tenant_id = :t AND role = 'WASHER' AND active = TRUE", [':t' => $tenantId]);
-        TTransaction::close();
-
+        // Lista paginada: evita carregar todo o histórico e serializar milhares
+        // de registros no HTML/JavaScript a cada abertura da tela.
+        $perPage = 25;
+        $currentPage = max(1, (int)($_GET['page'] ?? 1));
+        $totalOrders = 0;
+        $totalPages = 1;
+        $orders = [];
         $clientData = [];
-        foreach ($clients as $c) {
-            $clientData[(string)$c->id] = [
-                'name' => (string)$c->name,
-                'phone' => (string)($c->phone ?? ''),
-                'email' => (string)($c->email ?? ''),
-                'document' => (string)($c->document ?? ''),
-                'notes' => (string)($c->notes ?? ''),
-            ];
-        }
         $vehicleData = [];
-        foreach ($vehicles as $v) {
-            $vehicleData[(string)$v->id] = [
-                'client_id' => (string)$v->client_id,
-                'plate' => (string)$v->plate,
-                'brand' => (string)($v->brand ?? ''),
-                'model' => (string)($v->model ?? ''),
-                'color' => (string)($v->color ?? ''),
-                'category' => (string)($v->category ?? 'Passeio'),
-            ];
-        }
         $serviceData = [];
-        foreach ($services as $s) {
-            $serviceData[(string)$s->id] = [
-                'name' => (string)$s->name,
-                'price' => (float)$s->price,
-                'duration' => (int)($s->duration_minutes ?? 0),
-            ];
-        }
         $washerData = [];
-        foreach ($washers as $w) {
-            $washerData[(string)$w->id] = [
-                'name' => (string)$w->name,
-                'percent' => (float)($w->commission_percent ?? 0),
-            ];
+        $serviceIdByOrder = [];
+        $serviceNameByOrder = [];
+        $servicePriceByOrder = [];
+        $clients = [];
+        $vehicles = [];
+        $services = [];
+        $washers = [];
+
+        TTransaction::open();
+        try {
+            $pdo = TTransaction::get();
+            $countStmt = $pdo->prepare('SELECT COUNT(*) FROM public.service_orders WHERE tenant_id = :tenant_id');
+            $countStmt->execute([':tenant_id' => $tenantId]);
+            $totalOrders = (int)$countStmt->fetchColumn();
+            $totalPages = max(1, (int)ceil($totalOrders / $perPage));
+            $currentPage = min($currentPage, $totalPages);
+            $offset = ($currentPage - 1) * $perPage;
+
+            $ordersStmt = $pdo->prepare('SELECT * FROM public.service_orders
+                WHERE tenant_id = :tenant_id
+                ORDER BY entry_time DESC, id DESC
+                LIMIT :limit_rows OFFSET :offset_rows');
+            $ordersStmt->bindValue(':tenant_id', $tenantId);
+            $ordersStmt->bindValue(':limit_rows', $perPage, \PDO::PARAM_INT);
+            $ordersStmt->bindValue(':offset_rows', $offset, \PDO::PARAM_INT);
+            $ordersStmt->execute();
+            foreach ($ordersStmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $order = new ServiceOrder();
+                $order->fromArray($row);
+                $orders[] = $order;
+            }
+
+            $makeInParams = static function (string $prefix, array $ids, array &$binds): array {
+                $placeholders = [];
+                foreach ($ids as $index => $id) {
+                    $key = ':' . $prefix . $index;
+                    $placeholders[] = $key;
+                    $binds[$key] = $id;
+                }
+                return $placeholders;
+            };
+            $clientIds = array_values(array_unique(array_filter(array_map(static fn($o) => (string)$o->client_id, $orders))));
+            $vehicleIds = array_values(array_unique(array_filter(array_map(static fn($o) => (string)$o->vehicle_id, $orders))));
+            $orderIds = array_values(array_unique(array_filter(array_map(static fn($o) => (string)$o->id, $orders))));
+
+            if ($clientIds) {
+                $binds = [':tenant_id' => $tenantId];
+                $placeholders = $makeInParams('client_', $clientIds, $binds);
+                $stmt = $pdo->prepare('SELECT id, name, phone, email, document, notes FROM public.clients WHERE tenant_id = :tenant_id AND id IN (' . implode(',', $placeholders) . ')');
+                $stmt->execute($binds);
+                foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                    $client = new Client();
+                    $client->fromArray($row);
+                    $clients[] = $client;
+                }
+            }
+
+            if ($vehicleIds) {
+                $binds = [':tenant_id' => $tenantId];
+                $placeholders = $makeInParams('vehicle_', $vehicleIds, $binds);
+                $stmt = $pdo->prepare('SELECT id, client_id, plate, brand, model, color, category FROM public.vehicles WHERE tenant_id = :tenant_id AND id IN (' . implode(',', $placeholders) . ')');
+                $stmt->execute($binds);
+                foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                    $vehicle = new Vehicle();
+                    $vehicle->fromArray($row);
+                    $vehicles[] = $vehicle;
+                }
+            }
+
+            $services = Service::getObjects("tenant_id = :t AND status = 'ativo'", [':t' => $tenantId]);
+            $washers = User::getObjects("tenant_id = :t AND role = 'WASHER' AND active = TRUE", [':t' => $tenantId]);
+
+            if ($orderIds) {
+                $binds = [':tenant_id' => $tenantId];
+                $placeholders = $makeInParams('order_', $orderIds, $binds);
+                $snapshotColumn = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_order_items', 'service_name_snapshot')
+                    ? ', i.service_name_snapshot'
+                    : '';
+                $stmtItems = $pdo->prepare('SELECT i.service_order_id, i.service_id, i.price' . $snapshotColumn . '
+                    FROM public.service_order_items i
+                    INNER JOIN public.service_orders o ON o.id = i.service_order_id
+                    WHERE o.tenant_id = :tenant_id AND o.id IN (' . implode(',', $placeholders) . ')
+                    ORDER BY i.id');
+                $stmtItems->execute($binds);
+                foreach ($stmtItems->fetchAll(\PDO::FETCH_ASSOC) as $itemRow) {
+                    $orderId = (string)$itemRow['service_order_id'];
+                    $serviceIdByOrder[$orderId] = (string)($itemRow['service_id'] ?? '');
+                    $servicePriceByOrder[$orderId] = (float)$itemRow['price'];
+                    if (!empty($itemRow['service_name_snapshot'])) {
+                        $serviceNameByOrder[$orderId] = (string)$itemRow['service_name_snapshot'];
+                    }
+                }
+            }
+
+            foreach ($clients as $client) {
+                $clientData[(string)$client->id] = [
+                    'name' => (string)$client->name,
+                    'phone' => (string)($client->phone ?? ''),
+                    'email' => (string)($client->email ?? ''),
+                    'document' => (string)($client->document ?? ''),
+                    'notes' => (string)($client->notes ?? ''),
+                ];
+            }
+            foreach ($vehicles as $vehicle) {
+                $vehicleData[(string)$vehicle->id] = [
+                    'client_id' => (string)$vehicle->client_id,
+                    'plate' => (string)$vehicle->plate,
+                    'brand' => (string)($vehicle->brand ?? ''),
+                    'model' => (string)($vehicle->model ?? ''),
+                    'color' => (string)($vehicle->color ?? ''),
+                    'category' => (string)($vehicle->category ?? 'Passeio'),
+                ];
+            }
+            foreach ($services as $service) {
+                $serviceData[(string)$service->id] = [
+                    'name' => (string)$service->name,
+                    'price' => (float)$service->price,
+                    'duration' => (int)($service->duration_minutes ?? 0),
+                ];
+            }
+            foreach ($washers as $washer) {
+                $washerData[(string)$washer->id] = [
+                    'name' => (string)$washer->name,
+                    'percent' => (float)($washer->commission_percent ?? 0),
+                ];
+            }
+        } finally {
+            TTransaction::close();
         }
 
         $clientMap = [];
         foreach ($clients as $c) $clientMap[(string)$c->id] = (string)$c->name;
         $vehicleMap = [];
         foreach ($vehicles as $v) $vehicleMap[(string)$v->id] = trim((string)$v->plate . ' · ' . (string)$v->brand . ' ' . (string)$v->model);
-
-        // Mapa do serviço principal de cada O.S. para edição e ficha de conclusão.
-        $serviceIdByOrder = [];
-        $serviceNameByOrder = [];
-        if ($orders) {
-            TTransaction::open();
-            $pdo = TTransaction::get();
-            $snapshotColumn = \App\Service\RecordDeletionService::hasColumn($pdo, 'service_order_items', 'service_name_snapshot')
-                ? ', i.service_name_snapshot'
-                : '';
-            $stmtItems = $pdo->prepare('SELECT i.service_order_id, i.service_id, i.price' . $snapshotColumn . ' FROM service_order_items i INNER JOIN service_orders o ON o.id = i.service_order_id WHERE o.tenant_id = :tenant_id');
-            $stmtItems->execute([':tenant_id' => $tenantId]);
-            $servicePriceByOrder = [];
-            foreach ($stmtItems->fetchAll(\PDO::FETCH_ASSOC) as $itemRow) {
-                $serviceIdByOrder[(string)$itemRow['service_order_id']] = (string)$itemRow['service_id'];
-                $servicePriceByOrder[(string)$itemRow['service_order_id']] = (float)$itemRow['price'];
-                if (!empty($itemRow['service_name_snapshot'])) {
-                    $serviceNameByOrder[(string)$itemRow['service_order_id']] = (string)$itemRow['service_name_snapshot'];
-                }
-            }
-            TTransaction::close();
-        }
 
         $rows = '';
         foreach ($orders as $os) {
@@ -587,6 +659,24 @@ class OrdersController extends TPage
         }
         if ($rows === '') {
             $rows = '<tr><td colspan="7" class="empty-state"><strong>Nenhuma Ordem de Serviço cadastrada</strong><span>Crie o primeiro atendimento pelo botão acima.</span></td></tr>';
+        }
+
+        $pagination = '';
+        if ($totalPages > 1) {
+            $pagination .= '<nav class="pagination-bar" aria-label="Paginação de ordens">';
+            if ($currentPage > 1) {
+                $pagination .= '<a class="pagination-link" href="index.php?class=OrdersController&page=' . ($currentPage - 1) . '">Anterior</a>';
+            }
+            $startPage = max(1, $currentPage - 2);
+            $endPage = min($totalPages, $currentPage + 2);
+            for ($pageNumber = $startPage; $pageNumber <= $endPage; $pageNumber++) {
+                $activeClass = $pageNumber === $currentPage ? ' is-active' : '';
+                $pagination .= '<a class="pagination-link' . $activeClass . '" href="index.php?class=OrdersController&page=' . $pageNumber . '"' . ($pageNumber === $currentPage ? ' aria-current="page"' : '') . '>' . $pageNumber . '</a>';
+            }
+            if ($currentPage < $totalPages) {
+                $pagination .= '<a class="pagination-link" href="index.php?class=OrdersController&page=' . ($currentPage + 1) . '">Próxima</a>';
+            }
+            $pagination .= '<span class="pagination-caption">' . $totalOrders . ' O.S. · página ' . $currentPage . ' de ' . $totalPages . '</span></nav>';
         }
 
         $serviceOpts = '<option value="">Selecione um serviço</option>';
@@ -661,7 +751,7 @@ class OrdersController extends TPage
 
         echo "
         <div class='page-heading'><div><div class='eyebrow'>Operação</div><h1>Ordens de Serviço</h1><p>Cadastre o atendimento completo em um único fluxo.</p></div><div class='heading-actions'><a class='btn btn-secondary' href='index.php?class=AgendaController'>Ver agenda</a><button type='button' onclick='openOrderModal()' class='btn btn-primary btn-lg'>+ Novo Agendamento</button></div></div>
-        <div class='panel'><div class='panel-header'><div><div class='panel-title'>Atendimentos do lava-jato</div><div class='panel-subtitle'>Cliente, veículo, serviço, lavador, pagamento e status em uma única tela.</div></div></div><div class='panel-body'><div class='table-responsive'><table class='table-system'><thead><tr><th>O.S. #</th><th>Cliente</th><th>Veículo</th><th>Status</th><th>Valor & Pagamento</th><th>Entrada</th><th>Ações</th></tr></thead><tbody>{$rows}</tbody></table></div></div></div>
+        <div class='panel'><div class='panel-header'><div><div class='panel-title'>Atendimentos do lava-jato</div><div class='panel-subtitle'>Exibindo {$totalOrders} ordem(ns), 25 por página.</div></div></div><div class='panel-body'><div class='table-responsive'><table class='table-system'><thead><tr><th>O.S. #</th><th>Cliente</th><th>Veículo</th><th>Status</th><th>Valor & Pagamento</th><th>Entrada</th><th>Ações</th></tr></thead><tbody>{$rows}</tbody></table></div>{$pagination}</div></div>
 
         <div id='modalOrder' class='modal-backdrop'><div class='modal-content order-modal'><form method='POST' action='index.php?class=OrdersController'>{$csrf}<input type='hidden' name='action' value='save_order'><input type='hidden' id='os_id' name='id' value=''>
             <div class='modal-header'><div><div class='eyebrow'>Agendamento</div><div class='modal-title' id='osModalTitle'>Novo Agendamento</div></div><button type='button' class='modal-close' onclick='closeOrderModal()'>&times;</button></div>
