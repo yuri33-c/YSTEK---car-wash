@@ -3346,3 +3346,113 @@ body.theme-superadmin .pagination-caption { color: var(--sa-muted, #8ea1bf); }
     body.theme-tenant .chart-value { font-size: 7px; }
     body.theme-tenant .chart-weekday-mobile { font-size: 9px; }
 }
+
+/*
+ * YSTEK - Correção mobile do Check-in & Checklist
+ * Escopo: somente telas de até 780px; o layout desktop permanece inalterado.
+ * Corrige cartões estreitos e quebra de texto caractere por caractere.
+ */
+@media screen and (max-width: 780px) {
+    body.theme-tenant .operational-page .checklist-fieldset {
+        width: 100%;
+        min-width: 0;
+        padding: 13px;
+        overflow: visible;
+    }
+
+    body.theme-tenant .operational-page .checklist-fieldset legend {
+        max-width: 100%;
+        padding: 0 7px;
+        white-space: normal;
+        line-height: 1.35;
+    }
+
+    /* Uma opção por linha: elimina cartões estreitos em celulares. */
+    body.theme-tenant .operational-page .checklist-options {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) !important;
+        align-items: stretch;
+        gap: 9px;
+        width: 100%;
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+    }
+
+    /* Grid explícito impede que a caixa do checkbox empurre o texto. */
+    body.theme-tenant .operational-page .checklist-option {
+        display: grid !important;
+        grid-template-columns: 24px minmax(0, 1fr);
+        align-items: center;
+        justify-content: initial;
+        column-gap: 12px;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        min-height: 56px;
+        margin: 0;
+        padding: 12px 14px;
+        white-space: normal;
+        overflow: visible;
+        border: 1px solid var(--tn-border, #dce5ed);
+        border-radius: 11px;
+        background: var(--tn-surface, #fff);
+        color: var(--tn-text, #263d53);
+        font-size: 14px;
+        font-weight: 650;
+        line-height: 1.35;
+        text-align: left;
+    }
+
+    body.theme-tenant .operational-page .checklist-option input[type="checkbox"] {
+        display: block;
+        grid-column: 1;
+        grid-row: 1;
+        width: 22px !important;
+        min-width: 22px !important;
+        max-width: 22px !important;
+        height: 22px !important;
+        min-height: 22px !important;
+        max-height: 22px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        flex: none !important;
+        accent-color: var(--tn-blue, #176aa8);
+    }
+
+    body.theme-tenant .operational-page .checklist-option span {
+        display: block !important;
+        grid-column: 2;
+        grid-row: 1;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+        writing-mode: horizontal-tb !important;
+        white-space: normal !important;
+        word-break: normal !important;
+        overflow-wrap: break-word !important;
+        hyphens: none;
+        line-height: 1.35;
+    }
+
+    body.theme-tenant .operational-page .checklist-option:has(input:checked) {
+        border-color: var(--tn-blue, #176aa8);
+        background: var(--tn-blue-soft, #edf5fc);
+    }
+}
+
+/* Em telas extra estreitas, mantemos o mesmo cartão de uma coluna. */
+@media screen and (max-width: 360px) {
+    body.theme-tenant .operational-page .checklist-fieldset {
+        padding: 10px;
+    }
+
+    body.theme-tenant .operational-page .checklist-option {
+        min-height: 54px;
+        padding: 11px 12px;
+        font-size: 13px;
+        column-gap: 10px;
+    }
+}
