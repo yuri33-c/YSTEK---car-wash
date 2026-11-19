@@ -13,6 +13,27 @@ use Adianti\Widget\TMessage;
  */
 class FinancialController extends TPage
 {
+    /**
+     * Mantém os status coerentes com o tipo do lançamento.
+     * Valores antigos são normalizados para preservar os registros já salvos.
+     */
+    private function normalizeStatus(string $type, string $status): ?string
+    {
+        if ($type === 'Receita') {
+            $legacy = ['Pendente' => 'A receber', 'Pago' => 'Recebido'];
+            $status = $legacy[$status] ?? $status;
+            return in_array($status, ['A receber', 'Recebido'], true) ? $status : null;
+        }
+
+        if ($type === 'Despesa') {
+            $legacy = ['Pendente' => 'A pagar', 'Recebido' => 'Pago'];
+            $status = $legacy[$status] ?? $status;
+            return in_array($status, ['A pagar', 'Pago'], true) ? $status : null;
+        }
+
+        return null;
+    }
+
     public function process()
     {
         // Alteração rápida do status diretamente na listagem do Caixa.
@@ -23,9 +44,9 @@ class FinancialController extends TPage
                 }
 
                 $id = trim((string)($_POST['id'] ?? ''));
-                $status = trim((string)($_POST['status'] ?? ''));
-                if ($id === '' || !in_array($status, ['Pago', 'Pendente'], true)) {
-                    throw new \Exception('Status financeiro inválido.');
+                $postedStatus = trim((string)($_POST['status'] ?? ''));
+                if ($id === '') {
+                    throw new \Exception('Lançamento não informado.');
                 }
 
                 TTransaction::open();
@@ -38,6 +59,10 @@ class FinancialController extends TPage
                 }
 
                 $record = $objects[0];
+                $status = $this->normalizeStatus((string)$record->type, $postedStatus);
+                if ($status === null) {
+                    throw new \Exception('Status incompatível com o tipo do lançamento.');
+                }
                 $record->status = $status;
                 $record->store();
                 TTransaction::close();
@@ -75,12 +100,13 @@ class FinancialController extends TPage
                 $amountNormalized = str_replace('.', '', $amountRaw);
                 $amountNormalized = str_replace(',', '.', $amountNormalized);
                 $category = trim((string)($_POST['category'] ?? ''));
-                $status = trim((string)($_POST['status'] ?? 'Pago'));
+                $status = trim((string)($_POST['status'] ?? ($type === 'Despesa' ? 'A pagar' : 'A receber')));
 
                 if ($description === '') throw new \Exception('Informe a descrição do lançamento.');
                 if (strlen($description) > 200 || strlen($category) > 50) throw new \Exception('Um dos campos financeiros ultrapassou o limite permitido.');
                 if (!in_array($type, ['Receita', 'Despesa'], true)) throw new \Exception('Tipo de lançamento inválido.');
-                if (!in_array($status, ['Pago', 'Pendente'], true)) throw new \Exception('Status financeiro inválido.');
+                $status = $this->normalizeStatus($type, $status);
+                if ($status === null) throw new \Exception('Status incompatível com o tipo do lançamento.');
                 if (!is_numeric($amountNormalized)) throw new \Exception('Informe um valor financeiro válido.');
                 $amount = (float)$amountNormalized;
                 if ($amount < 0 || $amount > 99999999.99) throw new \Exception('Informe um valor entre R$ 0,00 e R$ 99.999.999,99.');
@@ -183,7 +209,8 @@ class FinancialController extends TPage
 
         $rows = '';
         foreach ($records as $r) {
-            $financialStatus = trim((string)($r->status ?? 'Pago'));
+            $rawFinancialStatus = trim((string)($r->status ?? ''));
+            $financialStatus = $this->normalizeStatus((string)$r->type, $rawFinancialStatus) ?? $rawFinancialStatus;
 
             $valFmt = 'R$ ' . number_format($r->amount, 2, ',', '.');
             $typeClass = $r->type === 'Receita' ? 'badge-concluido' : 'badge-cancelado';
@@ -191,9 +218,13 @@ class FinancialController extends TPage
             if ($financialStatus === 'Cancelado') {
                 $financialStatusControl = '<span class="badge badge-cancelado">Cancelado</span>';
             } else {
-                $financialStatusClass = $financialStatus === 'Pago' ? 'badge-concluido' : 'badge-pendente';
+                $isSettled = in_array($financialStatus, ['Pago', 'Recebido'], true);
+                $financialStatusClass = $isSettled ? 'badge-concluido' : 'badge-pendente';
                 $financialStatusOptions = '';
-                foreach (['Pago' => 'Pago / Recebido', 'Pendente' => 'Pendente'] as $statusValue => $statusLabel) {
+                $statusOptionsByType = $r->type === 'Despesa'
+                    ? ['A pagar' => 'A pagar', 'Pago' => 'Pago']
+                    : ['A receber' => 'A receber', 'Recebido' => 'Recebido'];
+                foreach ($statusOptionsByType as $statusValue => $statusLabel) {
                     $selected = $financialStatus === $statusValue ? ' selected' : '';
                     $financialStatusOptions .= '<option value="' . htmlspecialchars($statusValue, ENT_QUOTES, 'UTF-8') . '"' . $selected . '>' . htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8') . '</option>';
                 }
@@ -207,8 +238,7 @@ class FinancialController extends TPage
             }
 
             $rows .= "<tr>
-                <td>#" . substr((string)$r->id, 0, 8) . "</td>
-                <td><strong>" . htmlspecialchars($r->description) . "</strong></td>
+                <td><strong>" . htmlspecialchars((string)$r->description, ENT_QUOTES, 'UTF-8') . "</strong></td>
                 <td><span class='badge {$typeClass}'>" . htmlspecialchars($r->type) . "</span></td>
                 <td>" . htmlspecialchars($r->category) . "</td>
                 <td><strong>{$valFmt}</strong></td>
@@ -285,7 +315,6 @@ class FinancialController extends TPage
                     <table class='table-system'>
                         <thead>
                             <tr>
-                                <th>ID</th>
                                 <th>Descrição / Origem</th>
                                 <th>Tipo</th>
                                 <th>Categoria</th>
@@ -306,7 +335,7 @@ class FinancialController extends TPage
 
         {$premiumPanel}
 
-        <div id='modalFin' class='modal-backdrop'>
+        <div id='modalFin' class='modal-backdrop financial-form-modal'>
             <div class='modal-content'>
                 <form method='POST' action='index.php?class=FinancialController'>{$csrf}
                     <input type='hidden' name='action' value='save_financial'>
@@ -341,8 +370,8 @@ class FinancialController extends TPage
                             <div class='form-group'>
                                 <label>Status</label>
                                 <select id='f_status' name='status' class='form-control'>
-                                    <option value='Pago'>Pago / Recebido</option>
-                                    <option value='Pendente'>Pendente</option>
+                                    <option value='A receber'>A receber</option>
+                                    <option value='Recebido'>Recebido</option>
                                 </select>
                             </div>
                         </div>
@@ -356,10 +385,29 @@ class FinancialController extends TPage
         </div>
 
         <script>
+            function syncFinancialStatusOptions() {
+                const type = document.getElementById('f_type').value;
+                const status = document.getElementById('f_status');
+                const options = type === 'Despesa'
+                    ? [['A pagar', 'A pagar'], ['Pago', 'Pago']]
+                    : [['A receber', 'A receber'], ['Recebido', 'Recebido']];
+                while (status.firstChild) status.removeChild(status.firstChild);
+                options.forEach(function (item) {
+                    const option = document.createElement('option');
+                    option.value = item[0];
+                    option.textContent = item[1];
+                    status.appendChild(option);
+                });
+                status.value = options[0][0];
+            }
+            document.getElementById('f_type').addEventListener('change', syncFinancialStatusOptions);
             function openFinModal() {
                 document.getElementById('fin_id').value = '';
                 document.getElementById('f_description').value = '';
                 document.getElementById('f_amount').value = '';
+                document.getElementById('f_category').value = '';
+                document.getElementById('f_type').value = 'Receita';
+                syncFinancialStatusOptions();
                 document.getElementById('modalFin').classList.add('show');
             }
             function closeFinModal() {

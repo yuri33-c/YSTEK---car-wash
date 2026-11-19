@@ -269,6 +269,7 @@ class AgendaController extends TPage
         usort($orders, fn($a, $b) => strcmp((string)$a->entry_time, (string)$b->entry_time));
         $dateLabel = date('d/m/Y', strtotime($date));
         $rows = '';
+        $mobileCards = '';
         $detailModals = '';
         foreach ($orders as $o) {
             $canonicalStatus = OrderStatus::normalize((string)$o->status);
@@ -323,6 +324,9 @@ class AgendaController extends TPage
                 . '<select name="status" class="status-select ' . $this->e($stClass) . '" title="Alterar status" onchange="this.form.submit()">'
                 . $statusOptions . '</select></form>';
 
+            $checkinAction = \App\Service\PlanCatalog::allows(\App\Service\PlanGuard::currentPlan(), 'checkin_checklist')
+                ? '<a class="btn btn-primary btn-sm" href="index.php?class=OperationalController&order_id=' . rawurlencode((string)$o->id) . '">Check-in</a>'
+                : '';
             $detailId = 'agenda_detail_' . preg_replace('/[^a-zA-Z0-9_]/', '', (string)$o->id);
             $detailModal = '<div class="agenda-detail-modal" id="' . $detailId . '" aria-hidden="true">
                 <div class="agenda-detail-backdrop" onclick="closeAgendaDetail(this.closest(".agenda-detail-modal").id)"></div>
@@ -341,18 +345,28 @@ class AgendaController extends TPage
             </div>';
             $detailModals .= $detailModal;
 
+            // No celular, a agenda usa cartões próprios; a tabela desktop permanece intacta.
+            $mobileCards .= '<article class="agenda-mobile-card">'
+                . '<div class="agenda-mobile-card-top"><div class="agenda-mobile-time"><span>HORÁRIO</span><strong>' . $time . '</strong><small>' . $this->e($dateLabel) . '</small></div><div class="agenda-mobile-status">' . $statusSelect . '</div></div>'
+                . '<section class="agenda-mobile-client-box"><span class="agenda-mobile-label">CLIENTE</span><strong class="agenda-mobile-client-name">' . $client . '</strong><small>' . $phone . '</small></section>'
+                . '<section class="agenda-mobile-vehicle-box"><div class="agenda-mobile-box-heading"><span class="agenda-mobile-label">VEÍCULO</span><span class="agenda-mobile-plate">' . $plate . '</span></div><strong>' . $vehicleTitle . '</strong><small>' . $color . '</small></section>'
+                . '<section class="agenda-mobile-service-box"><span class="agenda-mobile-label">SERVIÇO</span><strong>' . $serviceNameEsc . '</strong></section>'
+                . '<div class="agenda-mobile-card-footer"><strong class="agenda-mobile-value">' . $value . '</strong><div class="agenda-mobile-actions"><button type="button" class="btn btn-secondary btn-sm" onclick="openAgendaDetail(this.dataset.id)" data-id="' . $this->e($detailId) . '">Detalhes</button>' . $checkinAction . '</div></div>'
+                . '</article>';
+
             $rows .= '<tr>
                 <td class="agenda-time"><strong>' . $time . '</strong><div class="table-secondary">' . $this->e($dateLabel ?? '') . '</div></td>
-                <td><strong class="agenda-primary-text">' . $client . '</strong><div class="table-secondary">' . $phone . '</div></td>
-                <td><strong>' . $vehicleTitle . '</strong><div class="table-secondary">' . $plate . ' · ' . $color . '</div></td>
+                <td class="agenda-client-cell"><strong class="agenda-primary-text agenda-client-name">' . $client . '</strong><div class="table-secondary">' . $phone . '</div></td>
+                <td class="agenda-vehicle-cell"><strong>' . $vehicleTitle . '</strong><div class="table-secondary">' . $plate . ' · ' . $color . '</div></td>
                 <td><strong>' . $serviceNameEsc . '</strong></td>
                 <td><strong>' . $value . '</strong></td>
                 <td>' . $statusSelect . '</td>
-                <td class="actions-cell"><button type="button" class="btn btn-secondary btn-sm" onclick="openAgendaDetail(this.dataset.id)" data-id="' . $this->e($detailId) . '">Ver detalhes</button>' . (\App\Service\PlanCatalog::allows(\App\Service\PlanGuard::currentPlan(), 'checkin_checklist') ? '<a class="btn btn-primary btn-sm" href="index.php?class=OperationalController&order_id=' . rawurlencode((string)$o->id) . '">Check-in</a>' : '') . '</td>
+                <td class="actions-cell"><button type="button" class="btn btn-secondary btn-sm" onclick="openAgendaDetail(this.dataset.id)" data-id="' . $this->e($detailId) . '">Ver detalhes</button>' . $checkinAction . '</td>
             </tr>';
         }
         if ($rows === '') {
             $rows = '<tr><td colspan="7" class="empty-state"><strong>Nenhum atendimento encontrado</strong><span>O histórico permanece salvo. Selecione outra data ou altere a pesquisa.</span></td></tr>';
+            $mobileCards = '<div class="agenda-mobile-empty"><strong>Nenhum atendimento encontrado</strong><span>Selecione outra data ou altere a pesquisa.</span></div>';
         }
 
         $prevDate = date('Y-m-d', strtotime($date . ' -1 day'));
@@ -387,7 +401,7 @@ class AgendaController extends TPage
         </div>
         <div class="panel">
             <div class="panel-header"><div><div class="panel-title">' . $dateLabel . '</div><div class="panel-subtitle">' . count($orders) . ' atendimento(s) no período</div></div></div>
-            <div class="panel-body table-body-compact"><div class="table-responsive"><table class="table-system agenda-table"><thead><tr><th>Horário</th><th>Cliente</th><th>Veículo / Placa</th><th>Serviço</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead><tbody>' . $rows . '</tbody></table></div></div>
+            <div class="panel-body table-body-compact"><div class="agenda-desktop-table"><div class="table-responsive"><table class="table-system agenda-table" data-no-mobile-cards="1"><thead><tr><th>Horário</th><th>Cliente</th><th>Veículo / Placa</th><th>Serviço</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead><tbody>' . $rows . '</tbody></table></div></div><div class="agenda-mobile-list">' . $mobileCards . '</div></div>
         </div>
         ' . $detailModals . '
         <script>

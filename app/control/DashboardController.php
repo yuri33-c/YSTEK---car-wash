@@ -31,7 +31,11 @@ class DashboardController extends TPage
         $today = date('Y-m-d');
         $tomorrow = date('Y-m-d', strtotime('+1 day'));
         $monthStart = date('Y-m-01');
+        // O desktop mantém a janela móvel dos últimos sete dias.
+        // O celular recebe uma visão fixa da semana, de segunda a domingo.
         $sevenDaysStart = date('Y-m-d', strtotime('-6 days'));
+        $weekStart = date('Y-m-d', strtotime('monday this week'));
+        $nextWeekStart = date('Y-m-d', strtotime($weekStart . ' +7 days'));
         $agendamentosHoje = 0;
         $aguardando = 0;
         $emServico = 0;
@@ -40,8 +44,13 @@ class DashboardController extends TPage
         $faturamentoMes = 0.0;
         $daily = [];
         for ($i = 6; $i >= 0; $i--) {
-            $day = date('Y-m-d', strtotime("-$i days"));
+            $day = date('Y-m-d', strtotime('-' . $i . ' days'));
             $daily[$day] = 0.0;
+        }
+        $weekDaily = [];
+        for ($i = 0; $i < 7; $i++) {
+            $day = date('Y-m-d', strtotime($weekStart . ' +' . $i . ' days'));
+            $weekDaily[$day] = 0.0;
         }
         $orders = [];
         $clientsCount = 0;
@@ -100,6 +109,28 @@ class DashboardController extends TPage
                 $dayKey = (string)$dailyRow['day'];
                 if (array_key_exists($dayKey, $daily)) {
                     $daily[$dayKey] = (float)$dailyRow['revenue'];
+                }
+            }
+
+            // Agregação independente para a visão mobile fixa de segunda a domingo.
+            $weekStmt = $pdo->prepare("
+                SELECT entry_time::date AS day, COALESCE(SUM(total_amount), 0) AS revenue
+                FROM public.service_orders
+                WHERE tenant_id = :tenant_id
+                  AND entry_time >= :from_date
+                  AND entry_time < :to_date
+                  AND status IN ('Finalizado', 'Concluído')
+                GROUP BY entry_time::date
+            ");
+            $weekStmt->execute([
+                ':tenant_id' => $tenantId,
+                ':from_date' => $weekStart . ' 00:00:00',
+                ':to_date' => $nextWeekStart . ' 00:00:00',
+            ]);
+            foreach ($weekStmt->fetchAll(\PDO::FETCH_ASSOC) as $weekRow) {
+                $weekKey = (string)$weekRow['day'];
+                if (array_key_exists($weekKey, $weekDaily)) {
+                    $weekDaily[$weekKey] = (float)$weekRow['revenue'];
                 }
             }
 
@@ -163,6 +194,23 @@ class DashboardController extends TPage
         foreach ($daily as $day => $value) {
             $height = max(3, min(100, ($value / $maxDay) * 100));
             $bars .= '<div class="chart-col"><div class="chart-value">R$ ' . number_format($value, 2, ',', '.') . '</div><div class="chart-bar-area"><div class="chart-bar" style="height:' . $height . '%"></div></div><div class="chart-label">' . date('D', strtotime($day)) . '<br>' . date('d/m', strtotime($day)) . '</div></div>';
+        }
+
+        $maxWeekDay = max(1.0, max($weekDaily));
+        $mobileBars = '';
+        $weekdayMobileLabels = [1 => 'Seg', 2 => 'Ter', 3 => 'Qua', 4 => 'Qui', 5 => 'Sex', 6 => 'Sáb', 7 => 'Dom'];
+        foreach ($weekDaily as $day => $value) {
+            $height = max(3, min(100, ($value / $maxWeekDay) * 100));
+            $weekdayNumber = (int)date('N', strtotime($day));
+            $weekdayMobile = $weekdayMobileLabels[$weekdayNumber] ?? '';
+            if ($value >= 1000000) {
+                $mobileValue = number_format($value / 1000000, 1, ',', '.') . 'mi';
+            } elseif ($value >= 1000) {
+                $mobileValue = number_format($value / 1000, 1, ',', '.') . 'k';
+            } else {
+                $mobileValue = number_format($value, 0, ',', '.');
+            }
+            $mobileBars .= '<div class="chart-col"><div class="chart-value">R$ ' . $mobileValue . '</div><div class="chart-bar-area"><div class="chart-bar" style="height:' . $height . '%"></div></div><div class="chart-label"><span class="chart-weekday-mobile">' . $weekdayMobile . '</span><span class="chart-date">' . date('d/m', strtotime($day)) . '</span></div></div>';
         }
 
         $todayFmt = 'R$ ' . number_format($faturamentoHoje, 2, ',', '.');
@@ -254,7 +302,7 @@ class DashboardController extends TPage
             <div class="metric-card"><div class="metric-title">Faturamento hoje</div><div class="metric-value">' . $todayFmt . '</div><div class="metric-sub">Vendas concluídas</div></div>
             <div class="metric-card"><div class="metric-title">Faturamento do mês</div><div class="metric-value">' . $monthFmt . '</div><div class="metric-sub">Até o momento</div></div>
         </div>
-        <div class="panel"><div class="panel-header"><div><div class="panel-title">Faturamento — últimos 7 dias</div><div class="panel-subtitle">Valores reais de atendimentos concluídos.</div></div></div><div class="dashboard-chart"><div class="chart-grid">' . $bars . '</div></div></div>
+        <div class="panel"><div class="panel-header"><div><div class="panel-title"><span class="chart-heading-desktop">Faturamento — últimos 7 dias</span><span class="chart-heading-mobile">Faturamento — semana atual</span></div><div class="panel-subtitle"><span class="chart-heading-desktop">Valores reais de atendimentos concluídos.</span><span class="chart-heading-mobile">De segunda a domingo · valores reais concluídos.</span></div></div></div><div class="dashboard-chart"><div class="chart-grid chart-grid-desktop">' . $bars . '</div><div class="chart-grid chart-grid-mobile">' . $mobileBars . '</div></div></div>
         ' . $managerBlock . $goalBlock . '
         <div class="dashboard-bottom">
             <div class="panel"><div class="panel-header"><div><div class="panel-title">Status dos atendimentos de hoje</div><div class="panel-subtitle">Acompanhe a operação em andamento.</div></div><a class="btn btn-secondary btn-sm" href="index.php?class=OrdersController">Ver O.S.</a></div><div class="panel-body table-body-compact"><div class="table-responsive"><table class="table-system"><thead><tr><th>O.S. #</th><th>Status</th><th>Valor</th><th>Entrada</th></tr></thead><tbody>' . $ordersRows . '</tbody></table></div></div></div>
